@@ -1,0 +1,13 @@
+[package]
+name = "roses-compare"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Evidence-aware checkpoint comparison and read-only PCSX2 observation"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+zip = { version = "=2.4.2", default-features = false, features = ["deflate", "zstd"] }

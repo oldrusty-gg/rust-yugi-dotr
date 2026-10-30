@@ -1,0 +1,26 @@
+[package]
+name = "roses-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "roses"
+path = "src/main.rs"
+
+[dependencies]
+roses-disc = { path = "../../crates/roses-disc" }
+roses-assets = { path = "../../crates/roses-assets" }
+roses-compare = { path = "../../crates/roses-compare" }
+roses-core = { path = "../../crates/roses-core" }
+roses-viewer = { path = "../../crates/roses-viewer" }
+roses-client = { path = "../../crates/roses-client" }
+roses-movie = { path = "../../crates/roses-movie" }
+# The launcher-game contract (`verify-import` prints its import report).
+platform-sdk = { path = "../../../platform-sdk/crates/platform-sdk" }
+serde.workspace = true
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+png.workspace = true
+sha2.workspace = true
+

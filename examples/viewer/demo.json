@@ -1,0 +1,559 @@
+{
+  "schema_version": "roses-board-view-1",
+  "label": "Synthetic demonstration",
+  "origin": {
+    "kind": "synthetic",
+    "description": "Invented cards, values and terrain for UI testing. No retail assets or gameplay rules."
+  },
+  "cells": [
+    {
+      "position": {
+        "column": 0,
+        "row": 0
+      },
+      "terrain_code": 0,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 1,
+        "row": 0
+      },
+      "terrain_code": 0,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 2,
+        "row": 0
+      },
+      "terrain_code": 1,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 3,
+        "row": 0
+      },
+      "terrain_code": 1,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 4,
+        "row": 0
+      },
+      "terrain_code": 2,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 5,
+        "row": 0
+      },
+      "terrain_code": 2,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 6,
+        "row": 0
+      },
+      "terrain_code": 3,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 0,
+        "row": 1
+      },
+      "terrain_code": 0,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 1,
+        "row": 1
+      },
+      "terrain_code": 0,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 2,
+        "row": 1
+      },
+      "terrain_code": 1,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 3,
+        "row": 1
+      },
+      "terrain_code": 1,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 4,
+        "row": 1
+      },
+      "terrain_code": 2,
+      "occupancy": {
+        "kind": "occupied",
+        "unit_key": 2
+      }
+    },
+    {
+      "position": {
+        "column": 5,
+        "row": 1
+      },
+      "terrain_code": 2,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 6,
+        "row": 1
+      },
+      "terrain_code": 3,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 0,
+        "row": 2
+      },
+      "terrain_code": 1,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 1,
+        "row": 2
+      },
+      "terrain_code": 1,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 2,
+        "row": 2
+      },
+      "terrain_code": 2,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 3,
+        "row": 2
+      },
+      "terrain_code": 2,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 4,
+        "row": 2
+      },
+      "terrain_code": 3,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 5,
+        "row": 2
+      },
+      "terrain_code": 3,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 6,
+        "row": 2
+      },
+      "terrain_code": 4,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 0,
+        "row": 3
+      },
+      "terrain_code": 1,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 1,
+        "row": 3
+      },
+      "terrain_code": 1,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 2,
+        "row": 3
+      },
+      "terrain_code": 2,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 3,
+        "row": 3
+      },
+      "terrain_code": 2,
+      "occupancy": {
+        "kind": "occupied",
+        "unit_key": 3
+      }
+    },
+    {
+      "position": {
+        "column": 4,
+        "row": 3
+      },
+      "terrain_code": 3,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 5,
+        "row": 3
+      },
+      "terrain_code": 3,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 6,
+        "row": 3
+      },
+      "terrain_code": 4,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 0,
+        "row": 4
+      },
+      "terrain_code": 2,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 1,
+        "row": 4
+      },
+      "terrain_code": 2,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 2,
+        "row": 4
+      },
+      "terrain_code": 3,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 3,
+        "row": 4
+      },
+      "terrain_code": 3,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 4,
+        "row": 4
+      },
+      "terrain_code": 4,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 5,
+        "row": 4
+      },
+      "terrain_code": 4,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 6,
+        "row": 4
+      },
+      "terrain_code": 5,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 0,
+        "row": 5
+      },
+      "terrain_code": 2,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 1,
+        "row": 5
+      },
+      "terrain_code": 2,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 2,
+        "row": 5
+      },
+      "terrain_code": 3,
+      "occupancy": {
+        "kind": "occupied",
+        "unit_key": 1
+      }
+    },
+    {
+      "position": {
+        "column": 3,
+        "row": 5
+      },
+      "terrain_code": 3,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 4,
+        "row": 5
+      },
+      "terrain_code": 4,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 5,
+        "row": 5
+      },
+      "terrain_code": 4,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 6,
+        "row": 5
+      },
+      "terrain_code": 5,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 0,
+        "row": 6
+      },
+      "terrain_code": 3,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 1,
+        "row": 6
+      },
+      "terrain_code": 3,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 2,
+        "row": 6
+      },
+      "terrain_code": 4,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 3,
+        "row": 6
+      },
+      "terrain_code": 4,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 4,
+        "row": 6
+      },
+      "terrain_code": 5,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 5,
+        "row": 6
+      },
+      "terrain_code": 5,
+      "occupancy": {
+        "kind": "empty"
+      }
+    },
+    {
+      "position": {
+        "column": 6,
+        "row": 6
+      },
+      "terrain_code": 6,
+      "occupancy": {
+        "kind": "empty"
+      }
+    }
+  ],
+  "units": [
+    {
+      "key": 1,
+      "card_id": 10,
+      "position": {
+        "column": 2,
+        "row": 5
+      },
+      "raw_location": null,
+      "card": {
+        "name": "Copper Fox",
+        "attack": 700,
+        "defense": 600,
+        "level": 3,
+        "deck_cost": 12
+      }
+    },
+    {
+      "key": 2,
+      "card_id": 20,
+      "position": {
+        "column": 4,
+        "row": 1
+      },
+      "raw_location": null,
+      "card": {
+        "name": "Harbor Sentinel",
+        "attack": 900,
+        "defense": 1100,
+        "level": 4,
+        "deck_cost": 18
+      }
+    },
+    {
+      "key": 3,
+      "card_id": 30,
+      "position": {
+        "column": 3,
+        "row": 3
+      },
+      "raw_location": null,
+      "card": {
+        "name": "Glass Moth",
+        "attack": 500,
+        "defense": 800,
+        "level": 2,
+        "deck_cost": 9
+      }
+    }
+  ],
+  "lp_candidates_by_raw_group": [
+    4000,
+    3700
+  ],
+  "unlinked_candidates": [],
+  "raw_candidate_fields": null
+}

@@ -1,0 +1,56 @@
+[workspace]
+resolver = "3"
+
+[package]
+name = "roses-game"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.95"
+publish = false
+
+[features]
+default = ["online"]
+renderer = ["dep:bevy"]
+# Port additions that are not in the 2003 game (docs/ADDITIONS.md): Online
+# Play (title entry, screens, decks, deck view/copy, map choice, the online
+# duel and its HUD names). `--no-default-features --features renderer`
+# builds the original only (the same as running with --faithful).
+online = ["dep:roses-net", "roses-core/online", "roses-client/online"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+roses-client = { path = "../../crates/roses-client", default-features = false }
+roses-assets = { path = "../../crates/roses-assets" }
+roses-core = { path = "../../crates/roses-core", default-features = false }
+roses-disc = { path = "../../crates/roses-disc" }
+roses-ee = { path = "../../crates/roses-ee" }
+roses-net = { path = "../../crates/roses-net", optional = true }
+# The video recorder (`--record`, a tool; docs/ADDITIONS.md).
+platform-video = { path = "../../../platform-sdk/crates/platform-video" }
+bevy = { version = "=0.19.0", optional = true, default-features = false, features = ["std", "async_executor", "multi_threaded", "bevy_asset", "bevy_log", "bevy_winit", "bevy_render", "bevy_core_pipeline", "bevy_pbr", "png"] }
+
+[dev-dependencies]
+roses-server = { path = "../../crates/roses-server" }
+# Tests build their synthetic matches with it in both builds; the game
+# itself links it only with the `online` feature.
+roses-net = { path = "../../crates/roses-net" }
+naga = { version = "=29.0.4", features = ["wgsl-in"] }
+
+[[bin]]
+name = "roses-bevy-scene"
+path = "src/main.rs"
+required-features = ["renderer"]
+
+[[bin]]
+name = "roses-duel-end-check"
+path = "src/bin/roses-duel-end-check.rs"
+required-features = ["renderer"]
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2

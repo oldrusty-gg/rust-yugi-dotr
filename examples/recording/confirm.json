@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "emulator_version": "PCSX2 v2.8.2",
+    "author": "Roses reference tooling",
+    "game_name": "Yu-Gi-Oh! - The Duelists of the Roses"
+  },
+  "segments": [
+    { "frames": 10, "buttons": [] },
+    { "frames": 10, "buttons": ["cross"] },
+    { "frames": 100, "buttons": [] }
+  ]
+}

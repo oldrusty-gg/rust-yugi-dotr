@@ -1,0 +1,14 @@
+[package]
+name = "roses-assets"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+publish = false
+description = "Bounded local decoding of supported PAL card metadata and pictures"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+# The disc fingerprints an imported library is checked against (`library`).
+roses-disc = { path = "../../crates/roses-disc" }

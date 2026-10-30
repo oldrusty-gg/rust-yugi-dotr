@@ -1,0 +1,90 @@
+# DRAFT. On a tag v*, build the Windows release package with
+# scripts/build-release.ps1, write SHA256SUMS, and publish both as a GitHub
+# release (as a draft, for a maintainer to check and publish). The
+# launcher and platform-sdk repositories must carry the same tag.
+#
+# Optional repository variables (Settings > Secrets and variables >
+# Actions > Variables) for the online server written into the package's
+# online.json: ROSES_ONLINE_SERVER (host:port), ROSES_ONLINE_PIN
+# (sha256:..., empty for a server with a public certificate) and
+# ROSES_ONLINE_NAME. Without ROSES_ONLINE_SERVER the package has no
+# online.json.
+#
+# The ISO byte-sample audit (build-release.ps1 -Iso) needs a disc image and
+# stays a local pre-release step; CI audits the package without it.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  ROSES_MUTE: "1"
+  RUST_TOOLCHAIN: "1.96.1"
+
+jobs:
+  windows-package:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: rust-yugi-dotr
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: rust-yugi-dotr
+      # The launcher and the platform SDK: sibling repositories at the same tag.
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/launcher
+          ref: ${{ github.ref_name }}
+          path: launcher
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/platform-sdk
+          ref: ${{ github.ref_name }}
+          path: platform-sdk
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/platform-accounts
+          ref: ${{ github.ref_name }}
+          path: platform-accounts
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Content guard
+        run: python scripts/publish/content_guard.py .
+      - name: Online server defaults
+        if: ${{ vars.ROSES_ONLINE_SERVER != '' }}
+        shell: pwsh
+        env:
+          SERVER: ${{ vars.ROSES_ONLINE_SERVER }}
+          PIN: ${{ vars.ROSES_ONLINE_PIN }}
+          NAME: ${{ vars.ROSES_ONLINE_NAME }}
+        run: |
+          New-Item -ItemType Directory -Force work/release | Out-Null
+          $d = [ordered]@{ server = $env:SERVER; pin = $env:PIN; name = $(if ($env:NAME) { $env:NAME } else { 'Roses' }) }
+          $d | ConvertTo-Json | Set-Content -Encoding utf8 work/release/online.defaults.json
+      - name: Build and audit the package
+        shell: pwsh
+        run: ./scripts/build-release.ps1 -Release "${{ github.ref_name }}"
+      - name: SHA256SUMS
+        shell: pwsh
+        run: |
+          $zip = "work/release/roses-${{ github.ref_name }}.zip"
+          $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower()
+          "$hash  roses-${{ github.ref_name }}.zip" | Set-Content -Encoding ascii work/release/SHA256SUMS
+          Get-Content work/release/SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          name: Roses ${{ github.ref_name }}
+          body_path: rust-yugi-dotr/scripts/release/KNOWN-ISSUES.txt
+          files: |
+            rust-yugi-dotr/work/release/roses-${{ github.ref_name }}.zip
+            rust-yugi-dotr/work/release/SHA256SUMS

@@ -1,0 +1,20 @@
+[package]
+name = "roses-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Narrow deterministic board transition model with explicit caller-supplied movement context"
+
+[features]
+default = ["online"]
+# Port additions for online play (not original commands): the server's
+# forfeit and the per-player filtered view. Off: the original's rules only
+# (docs/ADDITIONS.md).
+online = []
+
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

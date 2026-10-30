@@ -1,0 +1,10 @@
+[package]
+name = "roses-disc"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Read-only ISO9660 inspection for user-supplied Duelists of the Roses discs"
+
+[dependencies]
+serde = { workspace = true }
+sha2 = { workspace = true }

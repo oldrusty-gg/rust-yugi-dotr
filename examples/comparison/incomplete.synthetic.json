@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "scenario": "synthetic-comparator-smoke",
+  "profile": "synthetic-v1",
+  "metadata": {
+    "disc_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "executable_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "observer_version": "synthetic-fixture-1",
+    "provenance": "synthetic"
+  },
+  "required_fields": ["/turn", "/players"],
+  "checkpoints": [
+    {"id": "start", "observed": {"turn": 1, "players": [{"life_points": 10}, {"life_points": 10}]}},
+    {"id": "after-example-action", "observed": {"turn": 1, "players": [{"life_points": null}, {"life_points": 10}]}}
+  ]
+}

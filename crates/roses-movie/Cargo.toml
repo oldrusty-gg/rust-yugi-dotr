@@ -1,0 +1,16 @@
+[package]
+name = "roses-movie"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Pure-Rust PS2 PSS movie decoding (program stream demux, MPEG-2 video, SShd/SSbd PCM and PS-ADPCM audio) for user-supplied discs"
+
+[features]
+# Verification only: integer IDCT for bit-exact comparison with common software decoders.
+verify-int-idct = []
+
+[dependencies]
+
+[dev-dependencies]
+roses-disc = { path = "../../crates/roses-disc" }

@@ -1,0 +1,40 @@
+[package]
+name = "roses-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Headless authoritative duel server: owns the roses-core duel, validates every client intention, filters what each seat sees"
+
+[[bin]]
+name = "roses-server"
+path = "src/bin/roses-server.rs"
+
+[[bin]]
+name = "roses-online-client"
+path = "src/bin/roses-online-client.rs"
+
+[dependencies]
+roses-core = { path = "../../crates/roses-core", features = ["online"] }
+roses-net = { path = "../../crates/roses-net" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+# The OS random source (BCryptGenRandom/ProcessPrng, getrandom(2)) for
+# resume tokens, match ids and seeds.
+getrandom = "0.2"
+# Friends-online accounts: SQLite (bundled, one file, transactions, online
+# backup with VACUUM INTO) and Argon2id password hashes.
+rusqlite = { version = "0.37", features = ["bundled"] }
+argon2 = "0.5"
+# A self-signed certificate for a small private server (pinned by clients).
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# Email addresses, verification and password reset (the platform account
+# foundation; no game code in it).
+platform-accounts = { path = "../../../platform-accounts/crates/platform-accounts" }
+
+[dev-dependencies]
+# The launcher's Profile page jobs (account-only connections), tested here
+# against a real hub (tests/launcher_*.rs).
+platform-net = { path = "../../../platform-sdk/crates/platform-net" }
