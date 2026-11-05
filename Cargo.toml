@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/roses-disc", "crates/roses-assets", "crates/roses-core", "crates/roses-net", "crates/roses-ee", "crates/roses-movie", "crates/roses-client", "crates/roses-cli", "crates/roses-compare", "crates/roses-viewer", "crates/roses-server"]
+members = ["crates/roses-disc", "crates/roses-assets", "crates/roses-core", "crates/roses-net", "crates/roses-ee", "crates/roses-fx", "crates/roses-movie", "crates/roses-client", "crates/roses-cli", "crates/roses-compare", "crates/roses-viewer", "crates/roses-server"]
 default-members = ["crates/roses-cli"]
 # The game (Bevy) is its own workspace so `cargo test --workspace` stays quick.
 exclude = ["crates/roses-game"]

@@ -26,13 +26,16 @@ roses-client = { path = "../../crates/roses-client", default-features = false }
 roses-assets = { path = "../../crates/roses-assets" }
 roses-core = { path = "../../crates/roses-core", default-features = false }
 roses-disc = { path = "../../crates/roses-disc" }
-roses-ee = { path = "../../crates/roses-ee" }
+roses-fx = { path = "../../crates/roses-fx" }
 roses-net = { path = "../../crates/roses-net", optional = true }
 # The video recorder (`--record`, a tool; docs/ADDITIONS.md).
 platform-video = { path = "../../../platform-sdk/crates/platform-video" }
 bevy = { version = "=0.19.0", optional = true, default-features = false, features = ["std", "async_executor", "multi_threaded", "bevy_asset", "bevy_log", "bevy_winit", "bevy_render", "bevy_core_pipeline", "bevy_pbr", "png"] }
 
 [dev-dependencies]
+# The test oracle: the game runs no original code and does not link it; the
+# sweep and `model_index_equals_the_interpreters` test against it.
+roses-ee = { path = "../../crates/roses-ee" }
 roses-server = { path = "../../crates/roses-server" }
 # Tests build their synthetic matches with it in both builds; the game
 # itself links it only with the `online` feature.

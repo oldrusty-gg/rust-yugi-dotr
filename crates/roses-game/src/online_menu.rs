@@ -38,6 +38,7 @@ use roses_net::lobby::{
 };
 use crate::online_decks::{self, DeckEntry, DeckLibrary, DeckPreview, DeckRef};
 use roses_net::custom_decks::{self, CustomDeck};
+use roses_net::lobby::AuthProblem;
 use roses_net::{Compat, DeckSubmission};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -460,6 +461,38 @@ fn cut(s: &str) -> String {
     s.chars().take(LINE_MAX).collect()
 }
 
+/// The server could not be reached: the operating system's own sentence is
+/// longer than the note's line, so it goes to the log.
+fn unreachable_note(detail: &str) -> String {
+    eprintln!("Online: cannot reach the server: {detail}");
+    "cannot reach the server; try again later".into()
+}
+
+/// A sign-in problem for the note box, short enough for its line.
+fn auth_note(problem: AuthProblem) -> String {
+    match problem {
+        AuthProblem::BadUsername => "3-12 letters or digits, a letter first".into(),
+        AuthProblem::SignUpLimit => "too many new accounts; try later".into(),
+        AuthProblem::EmailNotVerified => "verify your email in the launcher first".into(),
+        p => cut(&p.to_string()),
+    }
+}
+
+/// Names by seat as `", "`-joined lines of [`LINE_MAX`] letters at most.
+pub fn name_lines(names: &[String]) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for name in names {
+        match lines.last_mut() {
+            Some(l) if l.chars().count() + 2 + name.chars().count() < LINE_MAX => {
+                l.push_str(", ");
+                l.push_str(name);
+            }
+            _ => lines.push(cut(name)),
+        }
+    }
+    lines
+}
+
 impl OnlineMenu {
     /// `config_path`: `online.json`; the session is kept next to it.
     pub fn new(config_path: &Path, deck: Result<DeckChoice, String>, compat: Compat) -> Self {
@@ -776,6 +809,16 @@ impl OnlineMenu {
         format!("{} vs {}", m.players[0], m.players[1])
     }
 
+    /// A live duel's row in the WATCH list: its title, or for an N-player
+    /// match the first player and how many more (four names do not fit).
+    pub fn live_row_title(m: &LiveMatch) -> String {
+        match m.seats.split_first() {
+            // The message font has no '+'.
+            Some((first, rest)) if m.seats.len() > 2 => format!("{first} &{}", rest.len()),
+            _ => Self::live_title(m),
+        }
+    }
+
     /// The rows of this screen and what each does.
     fn rows(&self) -> Vec<(Row, Action)> {
         let b = |t: &str, a: Action| (Row::Button(t.into()), a);
@@ -882,7 +925,7 @@ impl OnlineMenu {
                     .live()
                     .iter()
                     .enumerate()
-                    .map(|(i, m)| (Row::Live { title: Self::live_title(m), round: m.round, watching: m.watching }, Action::WatchMatch(i)))
+                    .map(|(i, m)| (Row::Live { title: Self::live_row_title(m), round: m.round, watching: m.watching }, Action::WatchMatch(i)))
                     .collect();
                 rows.push(b("BACK", Action::Back));
                 rows
@@ -1236,7 +1279,7 @@ impl OnlineMenu {
                 let problem = check_username(&self.name).and_then(|_| check_password(&self.password)).err();
                 if let Some(p) = problem {
                     self.sfx.push(SFX_BUZZER);
-                    self.note = Some(p.to_string());
+                    self.note = Some(auth_note(p));
                     return;
                 }
                 let invite_required = self.invite_required();
@@ -1794,7 +1837,7 @@ impl OnlineMenu {
                             }
                         }
                         Err(e) => {
-                            self.note = Some(cut(&format!("cannot reach the server: {e}")));
+                            self.note = Some(unreachable_note(&e.to_string()));
                             self.go(Screen::Server);
                         }
                     }
@@ -1802,7 +1845,7 @@ impl OnlineMenu {
                 Ok(Err(e)) => {
                     self.connecting = None;
                     self.sfx.push(SFX_BUZZER);
-                    self.note = Some(cut(&format!("cannot reach the server: {e}")));
+                    self.note = Some(unreachable_note(&e.to_string()));
                     self.go(Screen::Server);
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
@@ -1814,13 +1857,16 @@ impl OnlineMenu {
             self.last_ping = Instant::now();
             lobby.send(LobbyRequest::Ping);
         }
+        let listed = lobby.players.len();
         let events = lobby.pump();
         let connected = lobby.connected();
         for e in events {
             self.follow(e);
         }
-        if !connected {
-            let why = self.lobby.take().and_then(|l| l.note).unwrap_or_else(|| "the connection was lost".into());
+        self.keep_lobby_cursor(listed);
+        // (A refusal took the lobby already, and its note says why.)
+        if let Some(lost) = self.lobby.take_if(|_| !connected) {
+            let why = lost.note.unwrap_or_else(|| "the connection was lost".into());
             if self.screen != Screen::Starting {
                 self.note = Some(cut(&why));
                 self.go(Screen::Server);
@@ -1834,6 +1880,21 @@ impl OnlineMenu {
         if self.screen == Screen::Watch && self.last_list.elapsed() >= WATCH_REFRESH {
             self.ask_for_list();
         }
+    }
+
+    /// The list of who is online changed under the LOBBY screen: a cursor on
+    /// a button stays on that button, and it never ends up past the last row
+    /// (`listed`: the players listed before).
+    fn keep_lobby_cursor(&mut self, listed: usize) {
+        let now = self.lobby.as_ref().map_or(listed, |l| l.players.len());
+        if self.screen != Screen::Lobby || now == listed {
+            return;
+        }
+        // The list has this player too, who has no row.
+        if listed > 0 && self.cursor >= listed - 1 {
+            self.cursor = (self.cursor + now).saturating_sub(listed);
+        }
+        self.cursor = self.cursor.min(self.rows().len().saturating_sub(1));
     }
 
     fn follow(&mut self, e: LobbyEvent) {
@@ -1852,6 +1913,7 @@ impl OnlineMenu {
                     self.lobby_send(LobbyRequest::AllowSpectators { allow });
                 }
                 self.save_session(&username, &session);
+                self.resuming = false;
                 self.password.clear();
                 self.invite.clear();
                 self.note = None;
@@ -1862,16 +1924,22 @@ impl OnlineMenu {
             LobbyEvent::AuthFailed { problem } => {
                 if self.resuming {
                     self.resuming = false;
-                    self.forget_session();
                     self.go(Screen::Account);
-                    self.note = Some("please log in".into());
+                    // A busy server, too many tries from this address, or an
+                    // address still to verify: the saved session stays good.
+                    if matches!(problem, AuthProblem::Busy | AuthProblem::TooManyAttempts | AuthProblem::EmailNotVerified) {
+                        self.note = Some(auth_note(problem));
+                    } else {
+                        self.forget_session();
+                        self.note = Some("please log in".into());
+                    }
                 } else if self.screen == Screen::Signing {
                     self.sfx.push(SFX_BUZZER);
-                    self.note = Some(cut(&problem.to_string()));
+                    self.note = Some(auth_note(problem));
                     self.screen = Screen::Form { signup: self.signup };
                     self.cursor = 1;
                 } else {
-                    self.note = Some(cut(&problem.to_string()));
+                    self.note = Some(auth_note(problem));
                 }
             }
             LobbyEvent::SignedOut { elsewhere } => {
@@ -2152,7 +2220,7 @@ impl OnlineMenu {
                 if let Some(r) = &self.multi_active {
                     info.push(cut(&format!("{} match!", mode_name(r.settings.mode))));
                     let names: Vec<String> = r.seats.iter().map(|s| s.name.clone()).collect();
-                    info.push(cut(&names.join(", ")));
+                    info.extend(name_lines(&names));
                     info.push(format!("You sit at {}.", SEAT_NAMES.get(usize::from(r.seat)).copied().unwrap_or("?")));
                 }
                 info.push("Waiting for every player...".into());
@@ -2251,7 +2319,11 @@ impl OnlineMenu {
                 let live = self.live();
                 match live.get(self.cursor) {
                     Some(m) => {
-                        info.push(cut(&Self::live_title(m)));
+                        if m.seats.len() > 2 {
+                            info.extend(name_lines(&m.seats));
+                        } else {
+                            info.push(cut(&Self::live_title(m)));
+                        }
                         if let Some(map) = &m.map {
                             info.push(cut(&format!("Map: {}", online_decks::map_label(map))));
                         }
@@ -2276,7 +2348,10 @@ impl OnlineMenu {
             }
             Screen::WatchStarting => {
                 if let Some(w) = &self.watching {
-                    info.push(cut(&format!("{} vs {}", w.players[0], w.players[1])));
+                    match &self.watch_seats {
+                        Some(seats) => info.extend(name_lines(seats)),
+                        None => info.push(cut(&format!("{} vs {}", w.players[0], w.players[1]))),
+                    }
                     if let Some(m) = &w.map {
                         info.push(cut(&format!("Map: {}", online_decks::map_label(m))));
                     }

@@ -1,6 +1,6 @@
 //! CMODULE c546 (0x222), Widespread Ruin's per-cell blast (event 0x2E,
 //! handler 0x2671B0: nine copies, the trap's own cell with param 1), as
-//! specified in `claude-activate/NEWLY-ALLOWED.md` section 11 [F code; emu:
+//! specified in the project notes section 11 [F code; emu:
 //! the reference model `tools/mf_c546_model.py` equals the interpreter's
 //! primitives to 0.0625 px in seven runs]. The target is a CELL word: every
 //! node sits at C = (50 (col - 3), 0, 50 (row - 3)). Layers in draw order:

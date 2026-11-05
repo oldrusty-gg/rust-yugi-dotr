@@ -7,3 +7,4 @@ publish.workspace = true
 
 [dependencies]
 roses-assets = { path = "../../crates/roses-assets" }
+roses-fx = { path = "../../crates/roses-fx" }

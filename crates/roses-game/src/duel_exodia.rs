@@ -2,22 +2,21 @@
 //! it when a side's turn starts with Exodia complete, before the result
 //! (the duel ends with reason 2 once the event returns 0: 0x1D0EA0).
 //! Bevy-free: the timeline of the handler as cues for the presentation;
-//! the modules it launches run as original code elsewhere
-//! (`duel_opening_fx::LeaderEffect` for c620, [`FinaleEffect`] for
-//! c061..c063).
+//! the modules it launches run elsewhere (`duel_opening_fx::LeaderEffect`
+//! for c620, hand-ported: `roses_fx::c620`; [`FinaleEffect`] for
+//! c061 / c062 / c063, hand-ported: `roses_fx::c061` / `c062` / `c063`).
 //!
-//! TEMPORARY (Jim, 29 Oct 2026: the game is to stop running original
-//! code): the handler 0x26DAA0 itself is hand-ported here ([`Exodia`],
-//! plain Rust), but [`FinaleEffect`] (c061, c062, c063) and the c620s still
-//! run the original CMODULE programs through the `roses_ee` interpreter.
-//! They are to be hand-ported like the other `duel_c*.rs` modules, with
-//! the interpreter kept only as the reference the ports are tested
-//! against; then this runner goes.
+//! Jim, 29 Oct 2026: the game is to stop running original code. The
+//! handler 0x26DAA0 itself is hand-ported here ([`Exodia`], plain Rust);
+//! c620 (30 Oct, `roses_fx::c620`) and the finale's c061, c062 and c063
+//! (30 Oct, `roses_fx::c061` / `c062` / `c063`) are hand-ported, equal to
+//! the interpreter bit for bit (`roses_ee::parity`; the finale: test
+//! `parity_cmodule`). The game does not link the `roses_ee` interpreter;
+//! it is a dev-dependency, the reference the ports are tested against.
 //!
-//! Sources: the PAL executable (EE addresses), `work/research/duel/
-//! claude-exodia/FINDINGS.md` (private). Tags: [F] read in code, [emu]
+//! Sources: the PAL executable (EE addresses), the project notes (private). Tags: [F] read in code, [emu]
 //! checked against saved original states (the tutorial's scripted Exodia,
-//! `claude-pine/session/182..187`), [H] hypothesis.
+//! the project notes), [H] hypothesis.
 //!
 //! - [F] The turn start 0x269570 phase 0x80 builds the record {0x6D, side,
 //!   p2, 0} with p2 = slot(k0) << 9 | slot(k1) << 6 | slot(k2) << 3 |
@@ -598,7 +597,7 @@ impl Lord {
     }
 
     /// Object 0x20 as the finale's modules read it.
-    pub fn mirror(&self) -> roses_ee::bmodule::UnitMirror {
+    pub fn mirror(&self) -> roses_fx::types::UnitMirror {
         let s = &self.scene;
         let mut frames = [0u32; 8];
         for (m, len) in self.motions() {
@@ -607,7 +606,7 @@ impl Lord {
             }
         }
         let b = s.loaded.model.nodes.first().map_or([0.0; 4], |n| n.bounding_sphere);
-        roses_ee::bmodule::UnitMirror {
+        roses_fx::types::UnitMirror {
             position: s.object.position,
             rotation: [0, s.object.rotation[1], 0],
             animated: s.object.position,
@@ -628,20 +627,20 @@ impl Lord {
 /// What the finale's modules read each update: the board camera and
 /// Summoned Lord Exodia (role 0, object 0x20).
 pub struct LordWorld {
-    pub camera: roses_ee::bmodule::CameraMirror,
-    pub lord: roses_ee::bmodule::UnitMirror,
+    pub camera: roses_fx::types::CameraMirror,
+    pub lord: roses_fx::types::UnitMirror,
     pub nodes: Vec<[f32; 3]>,
 }
 
-impl roses_ee::bmodule::EffectWorld for LordWorld {
-    fn camera(&self) -> roses_ee::bmodule::CameraMirror {
+impl roses_fx::types::EffectWorld for LordWorld {
+    fn camera(&self) -> roses_fx::types::CameraMirror {
         self.camera
     }
-    fn unit(&self, role: usize) -> roses_ee::bmodule::UnitMirror {
+    fn unit(&self, role: usize) -> roses_fx::types::UnitMirror {
         if role == 0 {
             self.lord.clone()
         } else {
-            roses_ee::bmodule::UnitMirror { alpha: 0x80, speed: 1.0, ..self.lord.clone() }
+            roses_fx::types::UnitMirror { alpha: 0x80, speed: 1.0, ..self.lord.clone() }
         }
     }
     fn node(&self, role: usize, node: u8) -> Option<[f32; 3]> {
@@ -649,17 +648,17 @@ impl roses_ee::bmodule::EffectWorld for LordWorld {
     }
 }
 
-/// c061, c062 and c063 running as original code (one interpreter each:
-/// in the original they share memory; here object 0x20 is mirrored into
-/// each every update [H: state one module leaves for another is not
-/// shared]). The unit records and card objects of the board are not
-/// mirrored (c061 / c062 read them; reported).
+/// c061, c062 and c063 (hand-ported, `roses_fx::c061` / `c062` /
+/// `c063`): in the original they share memory; here
+/// object 0x20 is mirrored into each every update [H: state one module
+/// leaves for another is not shared]. The unit records and card objects
+/// of the board are not mirrored (c061 / c062 read them; reported).
 pub struct FinaleEffect {
-    effects: Vec<std::sync::Mutex<roses_ee::bmodule::AttackEffect>>,
+    effects: Vec<std::sync::Mutex<Box<dyn roses_fx::EffectPort>>>,
     /// Each module's state as the handler polls it (launch order).
     pub tasks: Vec<TaskState>,
     /// The last update's primitives by module.
-    pub prims: Vec<std::sync::Arc<Vec<roses_ee::bmodule::GsPrim>>>,
+    pub prims: Vec<std::sync::Arc<Vec<roses_fx::types::GsPrim>>>,
     /// The stage light 0x2DF5B2 c063 writes (0x80 = full).
     pub stage_light: u8,
     /// A motion a module gave object 0x20 this update.
@@ -670,21 +669,36 @@ pub struct FinaleEffect {
 impl FinaleEffect {
     /// Launch the three (init and the first update, as c620's launch).
     pub fn launch(executable: &[u8], cmodule: &[u8], texeff: Option<&[u8]>, lord: &Lord, side: u8, packed: u16, world: &LordWorld) -> Self {
-        let textures = roses_ee::bmodule::EffectTextures {
+        let textures = roses_fx::types::EffectTextures {
             texeff: texeff.map(crate::duel_bmodule::texeff_records).unwrap_or_default(),
             own: lord.textures.iter().map(|t| t.as_ref().map(|t| t.rh2.clone())).collect(),
             other: Vec::new(),
         };
         let motions = lord.motions();
         let mut effects = Vec::new();
+        let handles = [u16::from(side), packed];
         for id in FINALE {
-            match roses_ee::bmodule::AttackEffect::load_cmodule(executable, cmodule, id, [u16::from(side), packed], &textures) {
-                Ok(Some(mut fx)) => {
-                    fx.place_role(0, LORD_OBJECT, &motions);
-                    effects.push(std::sync::Mutex::new(fx));
+            let port = crate::duel_bmodule::guarded(format_args!("Exodia: CMODULE program {id:#x}"), || -> Option<Box<dyn roses_fx::EffectPort>> {
+                match id {
+                    roses_fx::c061::ID => roses_fx::c061::C061::load(executable, cmodule, handles, &textures).map(|mut fx| {
+                        fx.place_role(0, LORD_OBJECT, &motions);
+                        Box::new(fx) as Box<dyn roses_fx::EffectPort>
+                    }),
+                    roses_fx::c062::ID => roses_fx::c062::C062::load(executable, cmodule, handles, &textures).map(|mut fx| {
+                        fx.place_role(0, LORD_OBJECT, &motions);
+                        Box::new(fx) as Box<dyn roses_fx::EffectPort>
+                    }),
+                    roses_fx::c063::ID => roses_fx::c063::C063::load(executable, cmodule, handles, &textures).map(|mut fx| {
+                        fx.place_role(0, LORD_OBJECT, &motions);
+                        Box::new(fx) as Box<dyn roses_fx::EffectPort>
+                    }),
+                    _ => None,
                 }
+            });
+            match port {
+                Ok(Some(port)) => effects.push(std::sync::Mutex::new(port)),
                 Ok(None) => eprintln!("Exodia: CMODULE program {id:#x} is not in the import"),
-                Err(e) => eprintln!("Exodia: CMODULE program {id:#x} cannot load: {}", e.0),
+                Err(_) => {}
             }
         }
         let n = effects.len();
@@ -697,9 +711,11 @@ impl FinaleEffect {
             updates: 0,
         };
         // The init call, then the launch update's first update.
-        for e in &mut fx.effects {
+        for (i, e) in fx.effects.iter_mut().enumerate() {
             if let Ok(e) = e.get_mut() {
-                let _ = e.update(world);
+                if crate::duel_bmodule::guarded(format_args!("Exodia: CMODULE program {:#x}", FINALE[i]), || e.update(world)).is_err() {
+                    fx.tasks[i].running = false;
+                }
             }
         }
         fx.update(world);
@@ -712,26 +728,25 @@ impl FinaleEffect {
         self.updates += 1;
         for (i, e) in self.effects.iter_mut().enumerate() {
             let Ok(e) = e.get_mut() else { continue };
-            if e.finished {
+            // (`running` clear and not finished: the port panicked.)
+            if e.finished() || !self.tasks[i].running {
                 self.tasks[i].running = false;
                 self.prims[i] = std::sync::Arc::new(Vec::new());
                 continue;
             }
-            match e.update(world) {
+            match crate::duel_bmodule::guarded(format_args!("Exodia: CMODULE program {:#x}", FINALE[i]), || e.update(world)) {
                 Ok(u) => {
-                    self.tasks[i] = TaskState { running: !e.finished, ret: u.ret };
+                    self.tasks[i] = TaskState { running: !e.finished(), ret: u.ret };
                     if i == 2 {
                         self.stage_light = u.stage_light;
                     }
                     self.prims[i] = std::sync::Arc::new(u.prims);
-                    let (motion, _, _) = e.object_motion(0);
+                    let (motion, _, _) = e.object_motion(0).unwrap_or_default();
                     if motion != world.lord.motion {
                         self.motion = Some(motion);
                     }
                 }
-                Err(err) => {
-                    eprintln!("Exodia: CMODULE program {:#x} stopped: {}", FINALE[i], err.0);
-                    e.finished = true;
+                Err(_) => {
                     self.tasks[i].running = false;
                     self.prims[i] = std::sync::Arc::new(Vec::new());
                 }
@@ -771,8 +786,8 @@ pub struct ExodiaRun {
     pub own: std::sync::Arc<Vec<Option<roses_assets::RgbaImage>>>,
 }
 
-fn mirror_of(c: crate::duel_arena::CmotCamera) -> roses_ee::bmodule::CameraMirror {
-    roses_ee::bmodule::CameraMirror { eye: c.eye.map(|v| v as f32), target: c.target.map(|v| v as f32), distance: c.distance as f32, roll: c.roll as f32 }
+fn mirror_of(c: crate::duel_arena::CmotCamera) -> roses_fx::types::CameraMirror {
+    roses_fx::types::CameraMirror { eye: c.eye.map(|v| v as f32), target: c.target.map(|v| v as f32), distance: c.distance as f32, roll: c.roll as f32 }
 }
 
 impl ExodiaRun {
@@ -837,14 +852,14 @@ impl ExodiaRun {
         Some(run)
     }
 
-    fn board_camera(&self) -> roses_ee::bmodule::CameraMirror {
+    fn board_camera(&self) -> roses_fx::types::CameraMirror {
         let (eye, target) = self.view.unwrap_or(([0.0, 300.0, 300.0], [0.0; 3]));
         crate::duel_opening_fx::board_camera(eye, target)
     }
 
     /// The camera the effects see this update: the Lord's CMOT once it
     /// runs, else the board's.
-    pub fn effect_camera(&self) -> roses_ee::bmodule::CameraMirror {
+    pub fn effect_camera(&self) -> roses_fx::types::CameraMirror {
         match self.lord.as_ref().and_then(|l| l.camera(self.event.side)) {
             Some(c) => mirror_of(c),
             None => self.board_camera(),
@@ -960,7 +975,7 @@ impl ExodiaRun {
                 // The pieces have gone: the modules run on to their end.
                 None => LordWorld {
                     camera: view,
-                    lord: roses_ee::bmodule::UnitMirror {
+                    lord: roses_fx::types::UnitMirror {
                         position: [0.0; 3],
                         rotation: [0; 3],
                         animated: [0.0; 3],
@@ -987,7 +1002,7 @@ impl ExodiaRun {
 
     /// Every primitive list the event's modules drew this update (c620s,
     /// then the finale's c061, c062, c063).
-    pub fn prims(&self) -> Vec<std::sync::Arc<Vec<roses_ee::bmodule::GsPrim>>> {
+    pub fn prims(&self) -> Vec<std::sync::Arc<Vec<roses_fx::types::GsPrim>>> {
         let mut out: Vec<_> = self.c620.iter().map(|fx| fx.prims.clone()).collect();
         if let Some(f) = &self.finale {
             out.extend(f.prims.iter().cloned());
@@ -1246,7 +1261,7 @@ mod private_tests {
         let world = |lord: &Lord| {
             let c = lord.camera(0).unwrap();
             LordWorld {
-                camera: roses_ee::bmodule::CameraMirror { eye: c.eye.map(|v| v as f32), target: c.target.map(|v| v as f32), distance: c.distance as f32, roll: c.roll as f32 },
+                camera: roses_fx::types::CameraMirror { eye: c.eye.map(|v| v as f32), target: c.target.map(|v| v as f32), distance: c.distance as f32, roll: c.roll as f32 },
                 lord: lord.mirror(),
                 nodes: lord.nodes(),
             }

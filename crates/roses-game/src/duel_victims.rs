@@ -1,5 +1,5 @@
 //! A destroyed trap victim's modules, as traced in
-//! `claude-activate/FLIP-AND-VICTIMS.md` 3-4 [F code; emu: c603 88,320
+//! the project notes 3-4 [F code; emu: c603 88,320
 //! vertices to 0.16 px, c545 400 vertices to 0.062 px against the
 //! interpreter]:
 //! - c603 (0x25B, 60 updates, returns 2 at u 52): the victim's card cut into

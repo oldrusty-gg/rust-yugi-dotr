@@ -8,7 +8,7 @@
 //! import's files (TEXSYS #6/#7, PICMINI, MSG_E.DAT, the executable's string
 //! table at 0x2903B0). Sources were established from software-GS dumps and
 //! the game's own draw routines run in an interpreter (private research
-//! `work/research/duel/claude-end/screen`). Nothing here may be
+//! the project notes). Nothing here may be
 //! distributed.
 use crate::{emit_json, open_pal, Result};
 use serde::Serialize;

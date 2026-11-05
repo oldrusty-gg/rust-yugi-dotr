@@ -6,13 +6,12 @@ it from your own disc.**
 
 Roses works with your own copy of *Yu-Gi-Oh! The Duelists of the Roses*
 (PlayStation 2, **PAL / Europe, SLES-51579**). It is not an emulator: the game
-logic, rules, computer opponents, menus and renderer are new code. Everything
+logic, rules, computer opponents, menus and renderer are rewritten for PC. Everything
 the game shows and plays (cards, boards, models, music, movies and text) is
 read from an ISO image you made of your own disc, once, on your own PC.
 
 > Status: **beta**. The campaign, duels, deck editing, saving and online play
-> work; some screens, rare card effects and the per-monster attack
-> animations are still missing. See [KNOWN-ISSUES](scripts/release/KNOWN-ISSUES.txt).
+> work; some screens and a few rare rule situations are still missing. See [KNOWN-ISSUES](scripts/release/KNOWN-ISSUES.txt).
 
 ## Bring your own disc
 
@@ -139,7 +138,7 @@ minutes.
 | `crates/roses-game` | The game (Bevy renderer, screens, input, audio); its own workspace |
 | `crates/roses-cli` | `roses.exe`: the importer and developer check commands |
 | `crates/roses-client` | Game-side models of the screens (campaign map, HUD, menus) |
-| `crates/roses-ee` | An interpreter that runs code from the user's own executable at import time |
+| `crates/roses-ee` | A developer test tool: compares the rewritten effects with the user's own executable. No shipped program contains it, and the game runs no original code |
 | `crates/roses-movie` | MPEG-2 / PSS movie decoding |
 | `crates/roses-server` | The authoritative duel server, lobby and accounts |
 | `crates/roses-compare`, `crates/roses-viewer` | Developer tools (comparison against reference recordings, a legacy board viewer) |
@@ -156,8 +155,11 @@ affiliated with, endorsed, sponsored or approved by Konami, Konami Digital
 Entertainment, Studio Dice or Kazuki Takahashi. Yu-Gi-Oh! and Yu-Gi-Oh! The
 Duelists of the Roses are trademarks of their respective owners and are
 named here only to describe compatibility. Roses contains no game files,
-artwork, audio or text from the game; you need your own copy of the PAL disc
-to use it.
+artwork, audio, movies, card descriptions or story text: the game runs no
+original code and reads its data from your own disc. The source does mention
+some card names and short phrases, mostly in comments, and keeps a few small
+number tables the rewrite needs. You need your own copy of the PAL disc to
+use it.
 
 The software is provided as is, without warranty of any kind.
 

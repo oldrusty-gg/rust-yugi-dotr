@@ -1,7 +1,6 @@
 //! Trade (title mode 8): the two-player card exchange's model (Claude, 6
 //! Oct 2026). Bevy-free; the scene is `trade_render.rs` in the game binary.
-//! Notes, disassembly and interpreter runs: `work/research/modes/
-//! two-player/NOTES.md` §2 (`d_trade_1c3050.txt`, `tools/run_trade.py`).
+//! Notes, disassembly and interpreter runs: the project notes §2 (`d_trade_1c3050.txt`, `tools/run_trade.py`).
 //!
 //! Entry: the title's Trade runs memory-card op 4 (both slots loaded,
 //! `memory_card::CardDialog::trade_load`); on 1 mode 8 is pushed. Init

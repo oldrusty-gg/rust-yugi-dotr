@@ -430,7 +430,7 @@ fn render_frame(runtime: &mut SlotRuntime) {
 /// One 25 Hz update: the pad (scripted words first), the mode update and
 /// draw pass, the prizes into the winner's block, the main loop's two LCG
 /// calls, then the frame.
-/// The SYSTEM0 requests of an event (`claude-sound-ui/UI-SOUNDS.md` 5)
+/// The SYSTEM0 requests of an event (the project notes 5)
 /// [F sites]: the lever 0x20 (0x2853A0, the only call of the spin start)
 /// then the spin loop 0x1E (0x2815CC); a stop button 0x21; all stopped
 /// 0x217050(0, 0x1E); GET CARD 7, GET SPECIAL CARD 0x19.

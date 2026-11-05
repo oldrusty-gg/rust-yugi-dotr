@@ -7,8 +7,8 @@
 //! played by the frontend's story scene (`Handler::Story`).
 //!
 //! Sources (PAL SLES_515.79; private research
-//! `story/claude-story-red/BACKGROUNDS.md`, `claude-campaign-map/RED-ROUTE.md`
-//! §5, traces `trace-trigger.json`, `claude-map-windows/trace-trigger-cam.json`
+//! `story/the project notes, the project notes
+//! §5, traces `trace-trigger.json`, the project notes
 //! and `trace-win3.json` made with `tools/trace_story.py`):
 //!
 //! - Per frame the event's handler runs first (it sees the page phase of
@@ -396,7 +396,7 @@ impl MapModel {
 //
 // 12040 (Dover) and 12041 (the Strait): Mako's pages over the running map
 // (bottom speaker panel 0x232EF0..0x233650 with W+53BA, face slot 0x247310,
-// page machine W+537B). Sources [emu `story/claude-story-white/
+// page machine W+537B). Sources [emu `story/the project notes
 // trace-dover.json`, made with `tools/trace_white.py dover`; F the panel
 // draw 0x2332B0..0x233628]:
 //

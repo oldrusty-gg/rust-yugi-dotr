@@ -4,22 +4,21 @@ ROSES - known issues (release {RELEASE})
 Duelists of the Roses is in beta: you will run into bugs and missing
 pieces. These are the ones we already know about.
 
-- Attack effects (the per-monster battle animations) are not drawn yet;
-  battles resolve correctly but show simpler stand-ins.
-- A few rare card effects or rule situations are not supported yet.
+- A few rare rule situations are not supported yet.
   When one comes up, the game stops: the window title then reads
   "Roses - stopped: ..." with the reason. Close the game, start it
   again from the launcher and Continue from your last save. Please
   report it.
-- Some screens are still incomplete: the in-duel card details view,
-  parts of the deck editor's catalogue, NOW LOADING screens, and some
-  fades/timings differ slightly from the original.
+- Some loading times and fades differ slightly from the original.
 - The intro/ending movies' sound sync has not been checked by ear.
 - Two-player Custom Duel and Trade need a second controller (or the
   second keyboard layout) and have had little testing.
 - Online Play is a beta: make an account on the launcher's Profile
-  page (see README.txt). No rankings, chat or spectators yet, and it
+  page (see README.txt). No rankings or chat yet, and it
   has had little testing between two PCs.
+- In Build Deck the reincarnation and password screens and the 3D
+  card viewer are not drawn yet: the card lists stay on screen. If the
+  buttons seem to stop working there, press Circle or Cross.
 - Nothing is saved automatically. Save on the campaign map with
   SYSTEM -> SAVE; "Continue" on the title screen loads it.
 

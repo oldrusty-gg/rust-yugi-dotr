@@ -5,7 +5,7 @@
 //! Traced [F c605 0x1E02E40 and its routines; emu: c605's update run in the
 //! interpreter from footage state 089 matched the card fields of states
 //! 090-093 exactly; frames dumps-battle-return 122-171; notes
-//! `claude-units/C605-RETURN.md`]:
+//! the project notes]:
 //! - Mode (launch parameter): bit 1 = card A (attacker, left) destroyed,
 //!   bit 0 = card B (defender, right) destroyed. 50 updates; 36 when
 //!   neither is destroyed.

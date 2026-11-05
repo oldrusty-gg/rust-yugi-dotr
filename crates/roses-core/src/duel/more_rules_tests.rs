@@ -1,7 +1,7 @@
 //! Mask of Darkness 305 / Magician of Faith 43 (flip type 0x14), Dokurorider
 //! 128 (entry-1 type 2), Call of the Haunted 745 (magic type 0x36) and
 //! Fissure 726 (magic type 4 / hi 0, filter 0x20)
-//! (claude-effects/MORE-RULES-305-128-745-726.md). Synthetic cards with the
+//! (the project notes). Synthetic cards with the
 //! originals' effect words; Fissure keeps its id (the builder dispatches on
 //! it) and graveyard non-monsters use ids >= 0x2AB (the list filter 0x251920
 //! reads the id).

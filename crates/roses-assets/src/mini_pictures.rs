@@ -1,6 +1,6 @@
 //! PICMINI.MRG: one 4 KiB slot per card id holding a small RH2 record — the
 //! 40x32 mini pictures the duel HUD shows as leader portraits (duel texture
-//! map, `work/research/duel/claude-screen/TEXTURES.md`). Unlike the
+//! map, the project notes). Unlike the
 //! page-based opening archives, each record uploads a 256-entry C_16 palette
 //! and one row-major PSMT8 rect. Structure is validated; no pixels are
 //! embedded here.

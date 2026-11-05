@@ -1,5 +1,5 @@
 //! The game's music tracks and sound-effect banks, decoded natively
-//! (`claude-audio/DUEL-AUDIO-SCOPE.md`) [F]:
+//! (the project notes) [F]:
 //! - music: `SOUND/BGM/NN/XXXX.PCM`, a 2048-byte header {data bytes,
 //!   frames, loop start, loop end} then interleaved s16le stereo at 24 kHz;
 //!   `PCMLIST.BIN` holds 16-byte records {data bytes, track id, loop start,

@@ -1,5 +1,5 @@
 //! The red route's ending in the connected game (Claude, 4 Oct 2026;
-//! research `work/research/story/claude-ending/NOTES.md`): after the
+//! research the project notes): after the
 //! Cross on caption 3028 the story scene stays on map event 11184 while
 //! `roses_client::ending::RouteEnding` closes the letterbox, the memory-card
 //! op 2 dialog (`CardDialog::ending_save`) runs over the black screen, then

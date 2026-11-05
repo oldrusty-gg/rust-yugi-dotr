@@ -2,7 +2,7 @@
 //! as the original's HUD-leaf calls (`duel_hud::MenuCall`), Bevy-free
 //! (Claude, 6 Oct 2026).
 //!
-//! Provenance (`work/research/modes/panels/NOTES.md` §2,
+//! Provenance (the project notes §2,
 //! `two-player/d_detail_1be6e0.txt`): 0x1BE6E0 (name plate, the four page
 //! tabs, the editor's extra boxes) and its pages 0x1BF1D0 (card data),
 //! 0x1BFED0 (description), 0x1BFFF0 (the power-ups 0x24AD30 lists) and
@@ -36,6 +36,9 @@ pub struct DetailData {
     pub tints: [[u8; 4]; 4],
     /// 0x2BE343: the editor's library label.
     pub library: Vec<u8>,
+    /// 0x2BE2E7 / 0x2BE37A: the editor's message box titles.
+    pub caution: Vec<u8>,
+    pub password: Vec<u8>,
     /// 0x2BE313: the catalogue's footer word (0x1C04E0 state 0).
     pub back: Vec<u8>,
     /// 0x2BE34B: the picture box's text while the picture loads.
@@ -78,6 +81,8 @@ impl DetailData {
         Ok(Self {
             tints: [tint(0x2B_DCC0)?, tint(0x2B_DCC4)?, tint(0x2B_DCC8)?, tint(0x2B_DCCC)?],
             library: s(0x2B_E343)?,
+            caution: s(0x2B_E2E7)?,
+            password: s(0x2B_E37A)?,
             back: s(0x2B_E313)?,
             loading: s(0x2B_E34B)?,
             number: s(0x2B_E35B)?,
@@ -651,6 +656,8 @@ mod tests {
         let mut d = DetailData {
             tints: [[0; 4]; 4],
             library: Vec::new(),
+            caution: Vec::new(),
+            password: Vec::new(),
             back: Vec::new(),
             loading: Vec::new(),
             number: b"NO.%03d!".to_vec(),

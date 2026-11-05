@@ -1,4 +1,4 @@
-//! Tests for the effect families traced in `claude-effects/next/`
+//! Tests for the effect families traced in the project notes
 //! (ABILITY-2, ABILITY-3-CPU, ABILITY-9-10, ABILITY-12, F01–F06) on synthetic
 //! cards shaped like the originals (invented ids and numbers, no retail data).
 
@@ -76,7 +76,7 @@ const MIMIC: u16 = 112; // Mimicat-like: 0x14DF (mode 3, filter 0x1F any card)
 const REBORN: u16 = 113; // Monster Reborn-like: 0x14DD (mode 3, filter 0x1D monsters)
 const CELTIC: u16 = 114; // entry-2 type 0x39 (Celtic Guardian)
 const WEAKENER: u16 = 115; // entry-2 type 0x4D, 100 (Great Moth-like turn start)
-                           // ROUTE-3-5 (claude-effects/next/ROUTE-3-5.md).
+                           // ROUTE-3-5 (the project notes).
 const GHOUL: u16 = 120; // Shadow Ghoul-like: e1 0x095B / WALL
 const WALL: u16 = 121; // Wall Shadow-like: e1 0x085B
 const GUMO: u16 = 122; // Jirai Gumo-like: e0 0x019A, e1 0x425B / 100

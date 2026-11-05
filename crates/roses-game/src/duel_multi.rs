@@ -253,6 +253,59 @@ pub fn count_units(duel: &Duel, side: u8, slots: std::ops::RangeInclusive<u8>) -
     duel.units.iter().filter(|u| u.side == side && slots.contains(&u.slot)).count() as u8
 }
 
+/// `name` for a line that holds `letters`: whole if it fits, else its first
+/// word (the HUD's plates shorten "PEGASUS CRAWFORD" the same way), else its
+/// first letters.
+pub fn short_name(name: &str, letters: usize) -> String {
+    let name = name.trim();
+    if name.chars().count() <= letters {
+        return name.to_string();
+    }
+    match name.split_whitespace().next() {
+        Some(first) if first.chars().count() <= letters => first.to_string(),
+        _ => name.chars().take(letters).collect(),
+    }
+}
+
+/// Seat `s`'s name; a seat with no name (none sent, or blank) by its letter.
+pub fn seat_name(names: &[String], s: u8) -> String {
+    names
+        .get(usize::from(s))
+        .filter(|n| !n.trim().is_empty())
+        .cloned()
+        .unwrap_or_else(|| format!("SEAT {}", SEAT_LETTERS[usize::from(s) & 3]))
+}
+
+/// The compact plate's text, as offsets from the plate's corner. The panel
+/// (type 0) fills from 16 across and 21 down for its 180 x 48; the frame
+/// and its ornament are above that, so both lines sit in the fill, beside
+/// the portrait.
+pub const PLATE_FILL_TOP: i32 = 21;
+pub const PLATE_FILL_LEFT: i32 = 16;
+pub const PLATE_TEXT_X: i32 = 20 + PLATE_PORTRAIT + 6;
+pub const PLATE_NAME_Y: i32 = 25;
+pub const PLATE_LP_Y: i32 = 45;
+/// The width of a plate's text lines.
+pub const PLATE_TEXT_W: i32 = 120;
+/// Letters of a plate's name (an account name's 12).
+pub const PLATE_NAME_LETTERS: usize = 12;
+
+/// The compact plate's first line: the seat letter and the name.
+pub fn plate_title(side: u8, name: &str) -> String {
+    format!("{} {}", SEAT_LETTERS[usize::from(side) & 3], short_name(name, PLATE_NAME_LETTERS))
+}
+
+/// The plates, their OUT and TARGET labels: only with the HUD on screen.
+pub fn plates_shown(hud_shown: bool, exodia: bool) -> bool {
+    hud_shown && !exodia
+}
+
+/// "<NAME> OUT" over the board: not over a scene that has the screen to
+/// itself (the Exodia event, a battle's close-ups); it waits for the board.
+pub fn out_note_shown(duel_over: bool, animating: bool, exodia: bool, scene_hides_hud: bool) -> bool {
+    (!duel_over || animating) && !exodia && !scene_hides_hud
+}
+
 /// One compact plate (a player outside the HUD's pair).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Plate {
@@ -281,7 +334,7 @@ pub fn compact_plates(duel: &Duel, me: u8, pair: [u8; 2], names: &[String]) -> V
             let side = &duel.sides[usize::from(s)];
             Plate {
                 side: s,
-                name: names.get(usize::from(s)).cloned().unwrap_or_else(|| format!("SEAT {}", SEAT_LETTERS[usize::from(s) & 3])),
+                name: seat_name(names, s),
                 lp: side.lp,
                 stars: side.stars,
                 hand: side.hand.len().min(99) as u8,
@@ -308,15 +361,14 @@ pub fn compact_plates(duel: &Duel, me: u8, pair: [u8; 2], names: &[String]) -> V
 pub const NOTE_LETTERS: usize = 11;
 
 /// The turn note under the round box: "YOUR TURN", or TURN and the acting
-/// player's name (its first [`NOTE_LETTERS`] letters).
+/// player's name ([`short_name`] of [`NOTE_LETTERS`] letters).
 pub fn turn_lines(duel: &Duel, me: Option<u8>, names: &[String]) -> Vec<String> {
-    let name = |s: u8| names.get(usize::from(s)).cloned().unwrap_or_else(|| format!("SEAT {}", SEAT_LETTERS[usize::from(s) & 3]));
     if duel.outcome.is_some() {
         return vec!["MATCH OVER".into()];
     }
     match me {
         Some(m) if m == duel.active => vec!["YOUR TURN".into()],
-        _ => vec!["TURN".into(), name(duel.active).chars().take(NOTE_LETTERS).collect()],
+        _ => vec!["TURN".into(), short_name(&seat_name(names, duel.active), NOTE_LETTERS)],
     }
 }
 
@@ -521,8 +573,7 @@ pub fn knockout_units(
 /// The note over the board while a knockout shows: "<NAME> OUT" in the
 /// gold font's letters (others as spaces), at most 14 of them.
 pub fn out_note(name: &str) -> Vec<u8> {
-    let name: String = name.chars().take(10).collect();
-    format!("{} OUT", name.trim())
+    format!("{} OUT", short_name(name, PLATE_NAME_LETTERS))
         .bytes()
         .map(|b| if b.is_ascii_alphanumeric() { b.to_ascii_uppercase() } else { b' ' })
         .collect()
@@ -648,7 +699,7 @@ impl MultiPlay {
     }
 
     pub fn name(&self, side: u8) -> String {
-        self.names.get(usize::from(side)).cloned().unwrap_or_else(|| format!("SEAT {}", SEAT_LETTERS[usize::from(side) & 3]))
+        seat_name(&self.names, side)
     }
 
     /// Keep each seat's leader card while it is on the board.
@@ -928,6 +979,50 @@ mod tests {
         }
         assert_eq!((backs, show.t, show.pieces().len()), (1, crate::duel_victims::C603_UPDATES + 2 * KNOCKOUT_CAMERA_UPDATES, 0));
         assert_eq!(out_note("Rex Raptor"), b"REX RAPTOR OUT".to_vec());
+    }
+
+    /// Long names keep a whole word on every line that cuts them, and a
+    /// seat without a name shows its letter; a 12-letter account name stays
+    /// whole wherever the room allows.
+    #[test]
+    fn long_and_missing_names_read_properly_on_every_line() {
+        assert_eq!(short_name("Pegasus Crawford", 11), "Pegasus");
+        assert_eq!(short_name("Yugi", 11), "Yugi");
+        assert_eq!(short_name("Christopher1", 11), "Christopher");
+        assert_eq!(short_name("  Rex Raptor  ", 12), "Rex Raptor");
+        assert_eq!(out_note("Pegasus Crawford"), b"PEGASUS OUT".to_vec());
+        assert_eq!(out_note("Christopher1"), b"CHRISTOPHER1 OUT".to_vec());
+        assert_eq!(plate_title(2, "Pegasus Crawford"), "E Pegasus");
+        assert_eq!(plate_title(1, "Christopher1"), "N Christopher1");
+        let names = vec!["Yugi".to_string(), "".to_string(), "   ".to_string()];
+        assert_eq!(seat_name(&names, 0), "Yugi");
+        assert_eq!(seat_name(&names, 1), "SEAT N");
+        assert_eq!(seat_name(&names, 2), "SEAT E");
+        assert_eq!(seat_name(&names, 3), "SEAT W", "no name sent at all");
+    }
+
+    /// The plates' text sits in the panel's fill, not on its frame: the
+    /// name on the top ornament is what the 30 Oct takes showed.
+    #[test]
+    fn compact_plate_text_stays_off_the_frame_and_beside_the_portrait() {
+        assert!(PLATE_NAME_Y >= PLATE_FILL_TOP, "the name is below the top ornament");
+        assert!(PLATE_LP_Y >= PLATE_NAME_Y + 18, "two lines of the message font");
+        assert!(PLATE_LP_Y + 18 <= PLATE_FILL_TOP + 48, "both in the fill");
+        assert!(PLATE_TEXT_X >= 20 + PLATE_PORTRAIT, "beside the portrait");
+        assert!(PLATE_TEXT_X + PLATE_TEXT_W <= PLATE_FILL_LEFT + 180, "inside the fill");
+    }
+
+    /// What stays off a scene that has the screen to itself.
+    #[test]
+    fn plates_and_the_out_note_wait_for_the_exodia_event_and_battle_scenes() {
+        assert!(plates_shown(true, false));
+        assert!(!plates_shown(false, false), "the HUD is away");
+        assert!(!plates_shown(true, true), "the Exodia event, while the HUD slides out too");
+        assert!(out_note_shown(false, false, false, false));
+        assert!(out_note_shown(true, true, false, false), "the last knockout's pieces");
+        assert!(!out_note_shown(true, false, false, false), "the placing list has it");
+        assert!(!out_note_shown(true, true, true, false), "the Exodia event");
+        assert!(!out_note_shown(false, true, false, true), "a battle's close-ups");
     }
 
     /// A knockout's presentation follows the room setting: LEAVE queues the

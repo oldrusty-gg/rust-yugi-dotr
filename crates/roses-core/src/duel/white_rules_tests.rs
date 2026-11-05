@@ -1,7 +1,7 @@
 //! Hourglass of Life 377, Skelengel 384, the flips of Tongyo 470, Change
 //! Slime 570, The Drdek 325, Ooguchi 575 and Mystery Hand 310, Creature
 //! Swap 751, Binding Chain 386 and Fairy Meteor Crush 731
-//! (claude-effects/WHITE-REFUSALS.md). Synthetic cards with the originals'
+//! (the project notes). Synthetic cards with the originals'
 //! effect words; the ids the original's code reads (Jigen Bakudan 621 for
 //! Mystery Hand) are kept.
 

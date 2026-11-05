@@ -1,7 +1,7 @@
 //! Card faces as the original composes them (0x1DBA80): GS sprites drawn
 //! into a 256×368 texture (large: the record's flag 0x81 bit 4, the deck
 //! select's stack) or a 120×180 texture (small: hand cards, 0x1AFAC0). Source facts (PAL SLES_515.79, private
-//! research `duel/claude-card-face/`; [F] code/data, [emu] interpreter):
+//! research `duel/the project notes; [F] code/data, [emu] interpreter):
 //!
 //! - Mode constants (0x1DBB04..0x1DBB68): large s0 = 1, star entry 0x1F,
 //!   digit step 22, star size 16, card 256×368; small s0 = 0, star entry

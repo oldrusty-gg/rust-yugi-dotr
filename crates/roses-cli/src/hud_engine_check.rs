@@ -339,6 +339,7 @@ mod tests {
             flash: ram.h(0x2D_B828),
             extra: HudExtra {
                 option_30: ram.w(0x2D_AB08) != 0,
+                own_side: None,
                 overlay_mode: ram.b(0x2D_AB4E + u32::from(ram.b(0x2D_AB7E))) as i8,
                 terrain_model_ready: model != 0
                     && (ram.b(model + 498) as i8) >= 0

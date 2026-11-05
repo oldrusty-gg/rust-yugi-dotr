@@ -194,7 +194,13 @@ impl LobbyClient {
                 }
                 Received::Empty => break,
                 Received::Closed => {
+                    // A refusal said why; the close that follows it is not
+                    // news (the game's version, a full server).
+                    let why = self.refused.is_some().then(|| self.note.take()).flatten();
                     self.close("the server closed the connection");
+                    if why.is_some() {
+                        self.note = why;
+                    }
                     break;
                 }
                 Received::Malformed(m) => {
@@ -247,6 +253,7 @@ impl LobbyClient {
                 self.incoming.clear();
                 self.outgoing = None;
                 self.room = None;
+                self.mode_room = None;
                 self.note = Some(if *elsewhere { "signed in from another place".into() } else { "logged out".into() });
             }
             LobbyEvent::Players { players } => self.players = players.clone(),
@@ -343,6 +350,19 @@ mod tests {
 
     // The server file and session tests moved with them to
     // `platform_net::config`.
+
+    #[test]
+    fn a_refusal_keeps_its_reason_when_the_server_closes_after_it() {
+        use crate::transport::{memory_pair, Connection};
+        let (client, mut server) = memory_pair::<LobbyRequest, LobbyEvent>();
+        let mut c = LobbyClient::start(Box::new(client), Compat::current("x"), "test").unwrap();
+        server.send(&LobbyEvent::LobbyRefused { reason: LobbyRefusal::ServerFull }).unwrap();
+        server.close();
+        let events = c.pump();
+        assert!(matches!(events[..], [LobbyEvent::LobbyRefused { .. }]));
+        assert!(!c.connected());
+        assert_eq!(c.note.as_deref(), Some("the server is full"));
+    }
 
     #[test]
     fn new_names_skip_reserved_ones() {

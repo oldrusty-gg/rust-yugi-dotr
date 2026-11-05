@@ -1,5 +1,5 @@
 //! CMODULEs c531 (0x213, Shift's "vanish") and c532 (0x214, "appear"), event
-//! 0x1F (handler 0x25FB20), as specified in `claude-activate/MORE-EFFECTS.md`
+//! 0x1F (handler 0x25FB20), as specified in the project notes
 //! section 4 [F code; emu: the reference model `tools/mf_c531_model.py`
 //! equals the interpreter's primitives to 0.0625 px in four runs]. One code
 //! base, 20 updates each:
@@ -37,7 +37,7 @@ pub const SE_BANK: u8 = 1;
 pub const SE_C531: u16 = 0x27;
 pub const SE_C532: u16 = 0x28;
 pub const SE_U: u32 = 1;
-/// TEXEFF record and its sheet size (`claude-units/texeff/006.png`).
+/// TEXEFF record and its sheet size (the project notes).
 pub const SHEET: u8 = 6;
 const SHEET_W: f32 = 128.0;
 const SHEET_H: f32 = 64.0;

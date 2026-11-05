@@ -1,6 +1,6 @@
 //! `roses import-story-red`: extend the story-to-map import with the story
 //! events the campaign map fires on the Lancastrian route (PAL SLES_515.79;
-//! private research `story/claude-campaign-map/RED-ROUTE.md` §5–6 and the
+//! private research `story/the project notes §5–6 and the
 //! static dispatch summaries): the Bosworth trigger 11120 → 11122 → 11124,
 //! the Bosworth win 11140 → 11142 → 11143 → 11144 → 11146 → 11147 → 11148 →
 //! 11149, the Seto win 11160 → 11162 and the Manawyddan win 11180 → 11182 →
@@ -13,14 +13,14 @@
 //! `StoryEnd::MapEvent` (the map resumes at 11124, 108 or 112); 11184 ends
 //! with `MapEvent(11184)`: the rest of that map event is the ending
 //! (letterbox close, memory-card op 2, movie EDMV_A6, title), which the
-//! game runs with `roses_client::ending` (research `story/claude-ending/`).
+//! game runs with `roses_client::ending` (research `story/the project notes).
 //! Both ending movies, MOVIE/EDMV_A6.PSS and MOVIE/EDMV_C6.PSS, are copied
 //! as is (`media/ending-red.pss`, `media/ending-white.pss`, assets
 //! `ending-movie-red` / `ending-movie-white`) after a strict full decode
 //! with the built-in decoder, as the opening's PSS.
 //!
 //! Presentation, traced in the EE interpreter (research
-//! `story/claude-story-red/BACKGROUNDS.md`): the background drawer 0x22E8B0
+//! `story/the project notes): the background drawer 0x22E8B0
 //! (TEXEVE paintings bound per event by 0x229570, slid by W+53B0/W+53B2),
 //! the big figures (texture slots 6/7: TEXEVE 20/19, 22/19, 18), the
 //! letterbox 0x233750 (black bands of 72, 144 or 256 raw rows), the centred
@@ -1063,7 +1063,7 @@ pub fn run(iso: &Path, story: &Path, output: &Path) -> Result<()> {
         });
     }
     // 12000 (seto-yorkists, import-story-map): Simon's page 3044 shows his
-    // bottom mood 2 (W+546B = 2, expression 1) [emu claude-story-white
+    // bottom mood 2 (W+546B = 2, expression 1) [emu the project notes
     // trace-start]; its panel set is copied before the mood-0 pass.
     let simon_3044 = simon_3044_set(&manifest);
     // Every earlier story panel (opening, Simon, Seto, Yugi): face at mood 0

@@ -1,5 +1,5 @@
 //! The free-duel map after both routes (W+18C = 1) (Claude, 5 Oct 2026;
-//! notes and oracles in `work/research/modes/map-modes/`).
+//! notes and oracles in the project notes).
 //!
 //! Set-up 0x21C254 (story init with SAVE[1] && SAVE[2]) [F, emu
 //! captures/free-duel-hover.json]: map bank 0x1E91B0(3, 2, 0), SAVE[1] =

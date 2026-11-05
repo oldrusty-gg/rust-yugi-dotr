@@ -71,7 +71,7 @@ pub struct ArenaPose {
     /// switched the camera (0x1EF8F0 t3); `None`: the arena camera.
     pub rt_ndc: Option<camera::Mat4>,
     /// The attack effect's writes to the unit object (tint, colour, scale).
-    pub writes: Option<roses_ee::bmodule::UnitWrites>,
+    pub writes: Option<roses_fx::types::UnitWrites>,
     /// The stage light 0x2DF5B2 (128 = 1.0): FOGCOL is written with it.
     pub stage_light: u8,
 }
@@ -100,7 +100,7 @@ impl ArenaPose {
     /// B) = (+0x132, +0x131, +0x130), alpha = +0x133 * +0x128 truncated, and
     /// the blend index of 0x208450's table (0 = 0x44, 1 = 0x48, 2 = 0x42, 3 =
     /// 0x84); it leaves the target's alpha alone (FBMSK 0xFF000000) [F
-    /// 0x1EFD08 / 0x1F06C0..0x1F07F4; emu claude-bmodule emu-pass draw 54].
+    /// 0x1EFD08 / 0x1F06C0..0x1F07F4; emu the project notes emu-pass draw 54].
     pub fn colour_pass(&self) -> Option<([u8; 4], u8)> {
         let w = self.writes?;
         let mode = (w.mode >> 2) & 3;

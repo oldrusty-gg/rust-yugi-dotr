@@ -7,7 +7,7 @@
 //! Provenance. The draw function 0x1BBB60 was not traced instruction by
 //! instruction; the layout below is read from one software-GS dump of the
 //! original editor frame (PAL, map state 622 → SYSTEM icon 0, state 3 at
-//! entry: `work/research/modes/claude-deck-editor/entry-draws.txt`),
+//! entry: the project notes),
 //! tagged **[D]**: every sprite of that frame was matched to a descriptor
 //! of the executable's tables (sprites 0x28F300, attribute icons 0x28F2A0,
 //! gold glyphs 0x28FDF0) and its position recorded. What the dump could
@@ -503,6 +503,8 @@ pub fn build_screen(inp: &ScreenInputs<'_>) -> (Vec<Primitive>, Vec<Note>) {
         | state::DECK_LIST_DETAIL
         | state::DECK_DETAIL
         | state::CATALOGUE => {}
+        // Drawn over the lists by `message_box_calls`.
+        state::MSG_PASSWORD_WRONG | state::MSG_PASSWORD_USED | state::MSG_DECK_INVALID => {}
         other => b.note(format!(
             "editor state {other:#x} (prompts and messages) is not drawn; the lists are shown as in state 3"
         )),
@@ -1014,10 +1016,81 @@ pub fn detail_pane(snap: &EditorSnapshot, block: &CardBlock) -> Option<PaneChoic
     }
 }
 
+/// The message boxes' 0x1B1830 arguments [F 0x1C1D90, 0x1C1E20, 0x1C1EB0].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MessageBox {
+    pub message: u16,
+    pub top: i32,
+    pub width: i32,
+    pub min_height: i32,
+    /// "CAUTION" (else "PASSWORD").
+    pub caution: bool,
+    pub press: bool,
+}
+
+/// The box of a message state: wrong password (MSG 151), password already
+/// used (MSG 152), deck not valid (MSG 125, ○ refused). 0xA (a card shown
+/// with its box, 0x1C1B90) is not drawn.
+pub fn message_box(editor_state: u8) -> Option<MessageBox> {
+    let password = |message| MessageBox { message, top: 0xAD, width: 0x1CC, min_height: 0xA6, caution: false, press: true };
+    match editor_state {
+        state::MSG_PASSWORD_WRONG => Some(password(151)),
+        state::MSG_PASSWORD_USED => Some(password(152)),
+        state::MSG_DECK_INVALID => Some(MessageBox { message: 125, top: 0xC3, width: 0x100, min_height: 0x7A, caution: true, press: true }),
+        _ => None,
+    }
+}
+
+/// 0x1B1830(colour 2, message, centre 0x100, top, width, min height, title,
+/// press) as `trade_screen::banner_box` lays it out; `counter` picks the
+/// press icon's cel.
+pub fn message_box_calls(
+    editor_state: u8,
+    tables: &HudTables,
+    detail: &crate::card_detail::DetailData,
+    counter: u32,
+) -> Vec<roses_client::duel_hud::MenuCall> {
+    use roses_client::duel_hud::{MenuCall, TextCanvas};
+    let Some(m) = message_box(editor_state) else { return Vec::new() };
+    let Some(codes) = tables.message(m.message) else { return Vec::new() };
+    let title = if m.caution { &detail.caution } else { &detail.password };
+    let cx = 0x100;
+    let (tw, th) = crate::trade_screen::gold_measure(tables, 2, title);
+    let (plate_w, plate_h) = (tw + 0x18, th + 0xC);
+    let (lines, w) = TextCanvas::measure(codes);
+    let (lines, w) = (lines as i32, w as i32);
+    let width = m.width.max(w.max(plate_w) + 0x18);
+    let icon = if m.press { 0x1C } else { 0 };
+    let inner_h = m.min_height.max(plate_h + 0x18 + 22 * lines + 0xC + icon);
+    let mut out = vec![
+        MenuCall::Panel { grad: 13, deco: -1, ptype: 1, x: cx - (width >> 1) - 4, y: m.top, wu: -width, hu: -inner_h, bright: true },
+        MenuCall::Panel { grad: 2, deco: -1, ptype: 11, x: cx - (plate_w >> 1), y: m.top + 0xC, wu: -plate_w, hu: -plate_h, bright: true },
+        MenuCall::Gold { x: cx, y: m.top + 0x14, size: 2, flags: 3, text: title.clone(), dim: false },
+        MenuCall::Text { line: 2, message: m.message, x: cx - (w >> 1), y: m.top + plate_h + 0x18, sx: 1.0, sy: 1.0, lines: lines as u8, dim: false },
+    ];
+    if m.press {
+        out.push(MenuCall::Sprite { desc: 190 + ((counter / 5) % 3) as usize, x: cx - 8, y: m.top + inner_h - 0x1C });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use roses_client::duel_hud::MenuCall;
+
+    #[test]
+    fn the_refused_exit_and_the_password_messages_have_their_boxes() {
+        // The arguments of 0x1C1EB0 / 0x1C1D90 / 0x1C1E20.
+        let invalid = message_box(state::MSG_DECK_INVALID).unwrap();
+        assert_eq!((invalid.message, invalid.top, invalid.width, invalid.min_height, invalid.caution), (125, 0xC3, 0x100, 0x7A, true));
+        assert_eq!(message_box(state::MSG_PASSWORD_WRONG).unwrap().message, 151);
+        assert_eq!(message_box(state::MSG_PASSWORD_USED).unwrap().message, 152);
+        // The lists have no box.
+        for s in [state::TRUNK_LIST, state::DECK_LIST, state::CATALOGUE] {
+            assert_eq!(message_box(s), None);
+        }
+    }
 
     fn mine(c: &MenuCall) -> Option<(String, Vec<i64>)> {
         let v = |xs: &[i32]| xs.iter().map(|&x| i64::from(x)).collect();

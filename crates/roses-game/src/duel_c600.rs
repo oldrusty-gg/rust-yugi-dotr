@@ -1,5 +1,5 @@
 //! CMODULE C600's effect layers (the fusion), as traced in
-//! `claude-summon/C600-FUSION-EFFECT.md` [F/emu]: seven additive layers on
+//! the project notes [F/emu]: seven additive layers on
 //! four billboard nodes at view (-101, 8) on the depth-800 plane, plus the
 //! full-screen flash; base colour (160, 160, 128), everything additive and
 //! never occluded. Closed-form projection: view = (-101 + s lx, 8 - s ly,

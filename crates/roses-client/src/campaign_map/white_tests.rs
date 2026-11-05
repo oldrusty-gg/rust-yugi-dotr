@@ -585,7 +585,7 @@ mod private {
     #[test]
     #[ignore = "Requires the private White Rose map import (ROSES_WHITE_MAP_DATA)"]
     fn private_mako_pages_over_the_map_match_trace_dover() {
-        // trace-dover (claude-story-white): 12040 entered at f0; panel f19,
+        // trace-dover (the project notes): 12040 entered at f0; panel f19,
         // phase 4 f62, C2 = 104 f70, ship sailing f118, arrived f189, C2 =
         // 12041 f190, pages 3144..3161 (phase 4 f210 .. f336), close f344,
         // panel gone f368, Strait 1 f432, C2 = 0 f473. Line counts as traced
@@ -712,7 +712,7 @@ fn first_row(rows: &[DialogueRow], p: impl Fn(&DialogueRow) -> bool) -> Option<u
 
 #[test]
 fn mako_pages_play_over_the_map_with_the_traced_frames() {
-    // trace-dover (claude-story-white): f1 = the first update of 12040.
+    // trace-dover (the project notes): f1 = the first update of 12040.
     let data = white_fixture();
     let mut save = CampaignSave::white_start();
     save.event = 0;

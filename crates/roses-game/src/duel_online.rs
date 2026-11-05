@@ -22,8 +22,10 @@
 //! original's two-pad context (controllers 100 / 101, the match's Leader
 //! Ability / Card Display words, R2 on this seat's pad): with HIDE the
 //! other side's hand and face-down cards stay hidden (the copy only holds
-//! placeholders for them; a hidden summon flies face down) and this seat's
-//! own are shown while R2 is held, as on the shared screen.
+//! placeholders for them; a hidden summon flies face down). This seat's own
+//! cards are always named, on either side's turn: the original hides them
+//! until R2 is held only because its two players share a screen
+//! (`DuelPlay::hud_own_side`, a port addition).
 //!
 //! Spectating (a port addition, `--faithful` hides it with the rest of
 //! Online Play): [`OnlineLink::watch`] joins with a watch ticket instead of
@@ -51,7 +53,7 @@ use roses_net::mirror::{duel_events, hidden_card, mirror_duel, reveal};
 use roses_net::transport::{Connection, Received};
 use roses_net::{
     data_fingerprint, Actor, Cause, ClientMessage, Compat, Decision, DeckSubmission, Join, MatchOptions, MatchStatus,
-    PlayerView, Press, PressResponse, Rejection, RulesTables, SeenEvent, ServerMessage, Snapshot,
+    PlayerView, Press, PressResponse, Refusal, Rejection, RulesTables, SeenEvent, ServerMessage, Snapshot,
 };
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, Instant};
@@ -67,6 +69,11 @@ pub const ONLINE_OPPONENT: u8 = 101;
 pub const PRESS_WAIT: Duration = Duration::from_millis(1500);
 /// `DuelPlay::halted` when a spectator pressed Start to leave.
 pub const STOPPED_WATCHING: &str = "you stopped watching";
+/// How long a dropped connection is retried before the screen gives up (well
+/// past the server's reconnect grace, when the seat has been forfeited).
+pub const RECONNECT_GIVE_UP: Duration = Duration::from_secs(180);
+/// What the menu says then.
+pub const LOST_SERVER: &str = "the connection to the server was lost";
 
 /// One server revision as this seat received it.
 #[derive(Clone, Debug)]
@@ -173,9 +180,14 @@ pub struct OnlineLink {
     /// presentation is drawn from) and its watch ticket (to reconnect).
     pub spectator: bool,
     watch_ticket: Option<String>,
-    /// A spectator the server sent away (the match may no longer be
-    /// watched): why.
+    /// The server will not have this connection back (a spectator: the
+    /// match may no longer be watched; a seat: the match is gone), or it
+    /// could not be reached for [`RECONNECT_GIVE_UP`]: why.
     pub sent_away: Option<String>,
+    /// When the connection dropped (none while connected) and how long it
+    /// is retried.
+    lost_at: Option<Instant>,
+    give_up_after: Duration,
 }
 
 impl OnlineLink {
@@ -217,6 +229,8 @@ impl OnlineLink {
             spectator: false,
             watch_ticket: None,
             sent_away: None,
+            lost_at: None,
+            give_up_after: RECONNECT_GIVE_UP,
         };
         let start = Instant::now();
         let mut said_waiting = false;
@@ -281,6 +295,8 @@ impl OnlineLink {
             spectator: true,
             watch_ticket: Some(ticket),
             sent_away: None,
+            lost_at: None,
+            give_up_after: RECONNECT_GIVE_UP,
         };
         let start = Instant::now();
         loop {
@@ -338,6 +354,7 @@ impl OnlineLink {
         }
         self.note = Some(format!("{why}; reconnecting"));
         self.retry_at = Some(Instant::now());
+        self.lost_at.get_or_insert_with(Instant::now);
     }
 
     /// Read every waiting message; reconnect (resume) when the connection
@@ -381,6 +398,10 @@ impl OnlineLink {
         if self.state.ended.is_some() || self.sent_away.is_some() || at > Instant::now() {
             return;
         }
+        if self.lost_at.is_some_and(|t| t.elapsed() >= self.give_up_after) {
+            self.sent_away = Some(LOST_SERVER.into());
+            return;
+        }
         self.retry_at = Some(Instant::now() + Duration::from_secs(1));
         let Some(connector) = self.connector.as_mut() else {
             return;
@@ -401,13 +422,18 @@ impl OnlineLink {
 
     fn receive(&mut self, m: ServerMessage) {
         self.state.apply(&m);
+        if matches!(m, ServerMessage::Snapshot { .. }) {
+            self.lost_at = None;
+        }
         match m {
             ServerMessage::Update { revision, actor, cause, events, view } => self
                 .queue
                 .push_back(Item::Revision(Revision { revision, actor, cause, events, view }, Instant::now())),
             ServerMessage::Presence { seat, press } => {
-                // A spectator presents both seats' presses.
-                if seat != self.seat || self.spectator {
+                // A spectator presents both seats' presses. The welcome's
+                // seat: `self.seat` is not set until `connect` returns, and
+                // the first presses can come in with the opening snapshot.
+                if Some(seat) != self.state.seat || self.spectator {
                     self.queue.push_back(Item::Press(press));
                 }
             }
@@ -438,8 +464,11 @@ impl OnlineLink {
                 self.note = Some(format!("ended: {outcome:?} ({cause:?})"))
             }
             ServerMessage::Refused { reason } => {
-                if self.spectator {
-                    // Sent away (a player turned spectators off): no retry.
+                // Sent away (a player turned spectators off), or a seat's
+                // resume refused (the match is gone): no retry. A busy
+                // server may have room again.
+                let seated = self.state.token.is_some() && !matches!(reason, Refusal::ServerBusy);
+                if self.spectator || seated {
                     self.sent_away = Some(reason.plain());
                 }
                 self.note = Some(format!("refused: {}", reason.plain()))
@@ -470,6 +499,18 @@ impl OnlineLink {
 
     pub fn paused(&self) -> bool {
         matches!(self.state.status, Some(MatchStatus::Paused { .. }))
+    }
+
+    /// Why the duel stands still, for the screen: this game lost the server,
+    /// or a seat is gone and the server holds the match for its return.
+    pub fn away_note(&self) -> Option<&'static str> {
+        if self.lost_at.is_some() {
+            Some("RECONNECTING")
+        } else if self.paused() {
+            Some(if self.spectator { "PLAYER AWAY" } else { "OPPONENT AWAY" })
+        } else {
+            None
+        }
     }
 
     /// The match's Custom Duel switches as this screen presents them (the
@@ -1162,6 +1203,111 @@ pub(crate) mod tests {
         (game, runs)
     }
 
+    /// The other seat's first presses can reach this seat in the same read
+    /// as the opening snapshot, while `connect` is still running: they are
+    /// kept for the screen (seat 1 used to take them for its own and drop
+    /// them, so the first details pane never slid in).
+    #[test]
+    fn presses_read_with_the_opening_snapshot_are_kept() {
+        let cards = roses_net::synthetic::catalogue();
+        let setup = (roses_server::hub::HubData::synthetic(false).setup)(1);
+        let tokens = [roses_server::secret_token(), roses_server::secret_token()];
+        let mut game = OnlineMatch::with_submitted_decks("early", setup, cards.clone(), roses_net::OnlinePolicy::default(), tokens).unwrap();
+        let tables = RulesTables::empty();
+        let compat = Compat::current(data_fingerprint(&cards, &tables));
+        let decks = roses_net::synthetic::submissions();
+        let mut to_seat_1 = Vec::new();
+        for seat in 0..2u8 {
+            let join = Join::Seat { seat: Some(seat) };
+            let (_, out) = game.hello_streaming(&compat, &join, Some(&decks[usize::from(seat)]), true, 0).unwrap();
+            to_seat_1.extend(out.into_iter().filter(|(s, _)| *s == 1).map(|(_, m)| m));
+        }
+        assert_eq!(game.duel().active, 0);
+        let revision = game.revision();
+        let input = roses_core::duel::ui::DuelUi::new(game.duel());
+        let press = roses_net::Press { base_revision: revision, through_revision: revision, key: 0x10, response: roses_net::PressResponse::Moved, input, gap: 0 };
+        let out = game.handle(0, ClientMessage::Presence { press }, 0);
+        to_seat_1.extend(out.into_iter().filter(|(s, _)| *s == 1).map(|(_, m)| m));
+        let keep = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let held = keep.clone();
+        let connector: Connector = Box::new(move || {
+            let (client, mut server) = memory_pair::<ClientMessage, ServerMessage>();
+            for m in &to_seat_1 {
+                server.send(m).unwrap();
+            }
+            held.lock().unwrap().push(server);
+            Ok(Box::new(client) as ClientConn)
+        });
+        let link = OnlineLink::connect(connector, &cards, &tables, Join::Seat { seat: Some(1) }, Some(decks[1].clone()), Duration::from_secs(5), |_| {}).unwrap();
+        assert_eq!(link.seat, 1);
+        assert_eq!(link.queue.iter().filter(|i| matches!(i, Item::Press(_))).count(), 1);
+    }
+
+    /// The server restarted (the match is gone): a seat's resume is refused
+    /// and the duel stops, where it used to retry every second for ever; a
+    /// server that never comes back ends the same way.
+    #[test]
+    fn a_seat_whose_match_is_gone_stops_reconnecting() {
+        let cards = roses_net::synthetic::catalogue();
+        let setup = (roses_server::hub::HubData::synthetic(false).setup)(1);
+        let tokens = [roses_server::secret_token(), roses_server::secret_token()];
+        let mut game = OnlineMatch::with_submitted_decks("gone", setup, cards.clone(), roses_net::OnlinePolicy::default(), tokens).unwrap();
+        let (tx, mut rx) = mpsc::channel::<ServerConn>();
+        let stop = AtomicBool::new(false);
+        let connector = |tx: mpsc::Sender<ServerConn>| -> Connector {
+            Box::new(move || {
+                let (client, server) = memory_pair::<ClientMessage, ServerMessage>();
+                tx.send(Box::new(server)).map_err(|_| std::io::Error::other("server gone"))?;
+                Ok(Box::new(client) as ClientConn)
+            })
+        };
+        let decks = roses_net::synthetic::submissions();
+        let [mut one, mut two] = std::thread::scope(|scope| {
+            let server = scope.spawn(|| {
+                roses_server::serve::serve_with_limits(&mut rx, &mut game, &stop, roses_server::serve::Limits::UNLIMITED, |_| {}).unwrap();
+            });
+            let links = [0u8, 1].map(|seat| {
+                let (c, cards, deck) = (connector(tx.clone()), cards.clone(), decks[usize::from(seat)].clone());
+                scope.spawn(move || {
+                    OnlineLink::connect(c, &cards, &RulesTables::empty(), Join::Seat { seat: Some(seat) }, Some(deck), Duration::from_secs(30), |_| {}).unwrap()
+                })
+            });
+            let links = links.map(|l| l.join().unwrap());
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            server.join().unwrap();
+            links
+        });
+        let start = Instant::now();
+        let mut conn = loop {
+            one.pump();
+            if let Ok(conn) = rx.try_recv() {
+                break conn;
+            }
+            assert!(start.elapsed() < Duration::from_secs(20), "the seat did not try to resume");
+            std::thread::sleep(Duration::from_millis(2));
+        };
+        loop {
+            match conn.poll() {
+                Received::Message(ClientMessage::Hello { .. }) => break,
+                Received::Closed => panic!("no hello"),
+                _ => std::thread::sleep(Duration::from_millis(2)),
+            }
+        }
+        // A server with no room yet: still trying.
+        conn.send(&ServerMessage::Refused { reason: Refusal::ServerBusy }).unwrap();
+        one.pump();
+        assert_eq!(one.sent_away, None);
+        conn.send(&ServerMessage::Refused { reason: Refusal::BadToken }).unwrap();
+        one.pump();
+        assert_eq!(one.sent_away, Some(Refusal::BadToken.plain()));
+        // Nothing answers any more: the other seat gives up after the wait.
+        drop(rx);
+        two.give_up_after = Duration::ZERO;
+        two.pump();
+        two.pump();
+        assert_eq!(two.sent_away.as_deref(), Some(LOST_SERVER));
+    }
+
     fn check(game: &OnlineMatch, runs: &[ClientRun; 2], cards: &Catalogue, tables: &RulesTables) {
         let (outcome, cause) = game.ended().expect("the match ended");
         eprintln!("ended {outcome:?} ({cause:?}) at revision {}: {:?}", game.revision(), game.replay().entries.iter().rev().take(6).map(|e| format!("{:?}", e.action)).collect::<Vec<_>>());
@@ -1233,6 +1379,58 @@ pub(crate) mod tests {
             runs[1].presses,
             runs[1].refused_by_server
         );
+    }
+
+    /// Through a whole match under Card Display HIDE, on both seats' turns:
+    /// the HUD names a seat's own hand and own face-down cards, and never
+    /// the other seat's face-down cards or hand.
+    #[test]
+    fn a_seat_reads_its_own_cards_but_never_the_other_seats_hidden_ones() {
+        use roses_client::duel_hud::{from_duel, ui_from_input, HudUpdate};
+        use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+        // Own face-down, enemy face-down, own hand, enemy hand; own turn and
+        // the other seat's.
+        static SEEN: [[AtomicU64; 2]; 4] = [const { [const { AtomicU64::new(0) }; 2] }; 4];
+        let hud: HudFactory = Some(|_: &DuelPlay| {
+            Box::new(|p: &DuelPlay| {
+                let seat = p.online.as_ref().unwrap().seat;
+                let duel = &p.session.duel;
+                let previous = HudUpdate { d3c: duel.active, ..HudUpdate::default() };
+                let mut ui = ui_from_input(duel, &p.session.input, &previous, 0);
+                ui.hand_records = true;
+                ui.extra.own_side = p.hud_own_side();
+                let st = from_duel(duel, &ui, &p.data.catalogue, &p.hud_context(), &|_, _| 0, &previous);
+                let turn = usize::from(duel.active != seat);
+                let (field, hand) = st.units.split_at(duel.units.len());
+                for u in field.iter().filter(|u| u.slot > 0 && u.flags & 0x14 == 0) {
+                    let own = u.controller == seat;
+                    assert_eq!(u.face_down_hidden, !own, "seat {seat}, card {} on side {}, active {}", u.card, u.side, duel.active);
+                    SEEN[usize::from(!own)][turn].fetch_add(1, Relaxed);
+                }
+                for u in hand {
+                    assert_eq!(u.face_down_hidden, duel.active != seat, "seat {seat}, hand of side {}", duel.active);
+                    SEEN[2 + turn][turn].fetch_add(1, Relaxed);
+                }
+            })
+        });
+        let setup = MatchSetup {
+            seed: 99,
+            terrain: roses_net::synthetic::board(),
+            leaders: roses_net::synthetic::leaders(),
+            deck_sources: roses_net::synthetic::decks(),
+            first: 0,
+            leader_abilities: [vec![], vec![]],
+            custom_rules: None,
+            leader_ranks: [0; 2],
+            destiny_rows: None,
+        };
+        let data = || bare_data(roses_net::synthetic::catalogue(), roses_net::synthetic::board());
+        let rules = (RulesTables::empty(), MatchOptions::default());
+        online_match(roses_net::synthetic::catalogue(), setup, roses_net::synthetic::submissions(), rules, data, hud);
+        let seen = SEEN.each_ref().map(|s| s.each_ref().map(|n| n.load(Relaxed)));
+        eprintln!("own down, enemy down, own hand, enemy hand: {seen:?}");
+        assert!(seen[2][0] > 0 && seen[3][1] > 0, "{seen:?}");
+        assert!(seen[0].iter().chain(&seen[1]).all(|&n| n > 0), "{seen:?}");
     }
 
     /// Two headless Bevy clients (pad presses through `DuelPlay`, the input

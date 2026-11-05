@@ -1,3 +1,6 @@
 {
-  "name": "oldrusty"
+  "name": "oldrusty",
+  "launcher_releases": "https://github.com/oldrusty-gg/rust-yugi-dotr/releases/latest",
+  "launcher_issues": "https://github.com/oldrusty-gg/launcher/issues",
+  "website": "https://oldrusty.gg"
 }

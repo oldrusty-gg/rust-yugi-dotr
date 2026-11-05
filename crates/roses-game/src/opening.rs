@@ -62,7 +62,7 @@ pub struct OpeningPreview {
 }
 
 /// The music requests the original makes when this stage begins
-/// (`claude-sound-ui/UI-SOUNDS.md` 1, 2.1, 2.4) [F calls; the port issues
+/// (the project notes 1, 2.1, 2.4) [F calls; the port issues
 /// each at stage entry, H where the original makes it later in the event]:
 /// title and menu 2 (mode 1); history 10020 24 (mode 0); Simon's stages 25
 /// (mode 1; the history exit starts it); Seto 10080.. 26 (10071's end, mode
@@ -124,7 +124,7 @@ pub fn story_track(asset: &str) -> Option<u32> {
 }
 
 /// The SYSTEM0 sound of a press in an opening stage, as the original's
-/// input handlers play it (`claude-sound-ui/UI-SOUNDS.md` 1-2) [F sites]:
+/// input handlers play it (the project notes 1-2) [F sites]:
 /// title Start 4; main menu Up / Down 3, confirm 4; paged dialogue 2; name
 /// entry arrows 2, ○ 5, L1 / R1 7, insert 4, Start 1; practice / side
 /// choice Up / Down 3, Start 1; deck choice Left / Right 9, Start 1.
@@ -219,7 +219,7 @@ fn behind(id: &str) -> Option<roses_client::story_motion::Behind> {
 /// Stages drawn over the scene-0 world: 11160..11184 and 12130..12156
 /// [emu: W+53B5 3/2/3/1 and 10 model draws per frame in these events;
 /// 11182 and 12154 cover it with paintings; white: 12130 3, 12132 2, 12150
-/// 3, 12152 3, 12156 1 (claude-story-white traces)].
+/// 3, 12152 3, 12156 1 (the project notes traces)].
 pub fn is_scene0_stage(id: &str) -> bool {
     behind(id) == Some(roses_client::story_motion::Behind::Scene0)
 }
@@ -228,7 +228,7 @@ pub fn is_scene0_stage(id: &str) -> bool {
 /// the map mode there: 161..193 model draws every frame, the map shows
 /// behind 11140's and 11148's figures and panels, the black fill or
 /// paintings cover it in 11122..11147 [emu trace-trigger-cam, trace-win3;
-/// `claude-map-behind/NOTES.md`]). The map's own window and dialogue events
+/// the project notes]). The map's own window and dialogue events
 /// (11120, 11124, 11149, 12040, 12041) are played by the map model.
 pub fn plays_over_map(id: &str) -> bool {
     use roses_client::campaign_map::{DIALOGUE_EVENTS, MapModel};

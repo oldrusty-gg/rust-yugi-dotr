@@ -1,5 +1,5 @@
 //! The three game options of the card block's flag byte +0xFF9C (Claude,
-//! 5 Oct 2026). Notes and traces: `work/research/modes/map-modes/`.
+//! 5 Oct 2026). Notes and traces: the project notes.
 //!
 //! [F] 0x214340(side, i, v) writes and 0x214490(side, i) reads bit 2 + i
 //! of the block of `side` (0x2F2C10 + 0xFFA0·(side ≠ 0x312B50)); writing

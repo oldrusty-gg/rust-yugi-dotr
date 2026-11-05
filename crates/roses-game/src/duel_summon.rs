@@ -1,7 +1,7 @@
 //! The summon flight (states 0x4C / 0x4D, then 0x4F commit, 0x50 cleanup and
 //! 0x16): the picked card held front-up at view (0, 8) in 0x46 flies to its
 //! cell in 29 updates and lands as the face-down board card [F/emu
-//! `claude-summon/SUMMON-PRESENTATION.md` 2]:
+//! the project notes 2]:
 //! - every field moves linearly with c = floor(128 k / 30), k = 2..30 (one
 //!   per update), from the 0x46 pose: position view (0, 8) at depth 800,
 //!   spin (0, 0x10000, 0x10000), tilt = the camera's angles, scale (0.375,

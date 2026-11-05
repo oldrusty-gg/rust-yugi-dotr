@@ -235,8 +235,7 @@ fn the_save_record_carries_the_port_fields_and_keeps_the_rest() {
 }
 
 /// The dialogs against the original's own code run in the EE interpreter
-/// with a virtual card (`work/research/story/claude-save/captures/
-/// *.json`, private): per frame the overlay state, text and YES/NO cursor
+/// with a virtual card (the project notes, private): per frame the overlay state, text and YES/NO cursor
 /// and the SE requests. Set ROSES_SAVE_CAPTURES to the captures folder.
 #[test]
 fn private_dialogs_match_the_emulated_original() {
@@ -536,7 +535,7 @@ fn custom_duel_op3_checks_slot_two_after_loading_slot_one() {
 }
 
 /// Op 3 against the interpreter runs of the original (`ROSES_OP3_CAPTURES` =
-/// `work/research/modes/other-modes/captures`): box state and text
+/// the project notes): box state and text
 /// per frame, the result word.
 #[test]
 fn private_op3_matches_the_emulated_original() {

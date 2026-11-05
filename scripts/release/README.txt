@@ -16,8 +16,8 @@ WHAT YOU NEED
 - An ISO image of your own PAL disc:
   "Yu-Gi-Oh! The Duelists of the Roses" (Europe), SLES-51579, as a plain
   .iso file (an exact 1:1 dump; extract it first if it is in a .zip/.7z).
-  US/Japanese versions and modified ISOs are not accepted - the importer
-  checks the ISO's fingerprint and tells you if it doesn't match.
+  US/Japanese versions and modified ISOs are not supported - the importer
+  checks the whole image and refuses anything but an exact match.
 - Nothing else to install: no emulator, BIOS, ffmpeg or runtime packages.
 
 
@@ -68,16 +68,12 @@ folder (or at least roses-data\memory-card) into the new folder.
 KNOWN LIMITATIONS
 -----------------
 (Also in KNOWN-ISSUES.txt, which the launcher's "Known issues" link opens.)
-- Attack effects (the per-monster battle animations) are not drawn yet;
-  battles resolve correctly but show simpler stand-ins.
-- A few rare card effects or rule situations are not supported yet.
+- A few rare rule situations are not supported yet.
   When one comes up, the game stops: the window title then reads
   "Roses - stopped: ..." with the reason. Close the game, start it
   again from the launcher and Continue from your last save. Please
   report it (see below).
-- Some screens are still incomplete: the in-duel card details view,
-  parts of the deck editor's catalogue, NOW LOADING screens, and some
-  fades/timings differ slightly from the original.
+- Some loading times and fades differ slightly from the original.
 - The intro/ending movies' sound sync has not been checked by ear.
 - Two-player Custom Duel and Trade need a second controller (or the
   second keyboard layout) and have had little testing.

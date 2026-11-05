@@ -3,7 +3,7 @@
 //! TEXSYS.MRG atlases, message font and the board import's terrain models
 //! (the terrain picture 0x1B4370). Bevy-free; the scene is
 //! `map_editor_render.rs` in the binary. Notes:
-//! `work/research/modes/map-editor/NOTES.md`.
+//! the project notes.
 use crate::duel_hud_picture::TerrainPicture;
 use roses_client::duel_hud::{self, HudTables, HudTextures, MenuCall, YesNoTables};
 use roses_client::map_editor::{EditorTables, MapEditor};

@@ -6,11 +6,9 @@
 //! frame (the deck editor's present shader). Build Deck opens the deck
 //! editor, Save the op-1 dialog over the menu, Start the duel; the duel (and
 //! its reels) and the deck editor come back here with init −1, as the
-//! original's mode switch does. Notes: `work/research/modes/
-//! custom-duel/NOTES.md`.
+//! original's mode switch does. Notes: the project notes.
 //!
-//! Two players (slot 2 holding a save: selector 0; `work/research/
-//! modes/two-player/NOTES.md`): side 1 is slot 2's card block, played on
+//! Two players (slot 2 holding a save: selector 0; the project notes): side 1 is slot 2's card block, played on
 //! pad 2 (`pad_input::Pads`: the second keyboard layout or gamepad), its
 //! name plate MSG 5 = slot 2's player name; the duel seats two humans
 //! (controls 100/101). The 2P menu has no Save row: slot 2's block is

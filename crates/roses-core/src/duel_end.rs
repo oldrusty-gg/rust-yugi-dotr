@@ -1,5 +1,5 @@
 //! The result sequence of a duel: sub-states 0x54..0x62 of the duel state
-//! machine 0x1D00F0 (private research `claude-end/DUEL-END.md` §0–§3,
+//! machine 0x1D00F0 (private research the project notes §0–§3,
 //! handlers 0x1D84A8–0x1D8F38), stepped one frame at a time with the pad.
 //!
 //! What the original does after the outcome (D50 winner, D51 reason) is

@@ -1,5 +1,5 @@
 //! CMODULE c034 (0x22), Negate Attack's shield on the attacker, as traced
-//! in `claude-activate/EFFECT-MODULES-2.md` 3 [F code; emu: the model
+//! in the project notes 3 [F code; emu: the model
 //! matched the interpreter to 0.062 px for both sides]: a white dome of
 //! 9 x 18 untextured Gouraud quads, 50 units above the attacker's cell and
 //! 32 in front of it, turned to face the opponent's half; alpha +32 to 192

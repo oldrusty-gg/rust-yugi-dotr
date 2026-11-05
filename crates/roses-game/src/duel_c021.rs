@@ -1,6 +1,6 @@
 //! CMODULE c021 (0x15), Dark Hole (magic 699, event 4, handler 0x258C60:
 //! stage 2 launches {0x15, 0, mask, 0} through 0x257350), as specified in
-//! `claude-activate/DARK-HOLE-BLOCKER-GRAVEROBBER.md` [F code; emu: the
+//! the project notes [F code; emu: the
 //! reference model `tools/mf_c021_model.py` equals the interpreter's
 //! primitives in four runs (two savestates, three cameras) to 0.0625 px,
 //! with every count, colour, UV, ALPHA, OT key, Z, return code, light byte,
@@ -46,7 +46,7 @@ use crate::duel_c621::FxTri;
 /// The update after which the targets are no longer drawn by the board
 /// (the handler removes them when the module ends).
 pub const SE_ID: u16 = 0x49;
-/// TEXEFF sheet size (`claude-units/texeff/015.png`).
+/// TEXEFF sheet size (the project notes).
 const SHEET: f32 = 256.0;
 const DB: u32 = 0x1E1_0000;
 

@@ -1,5 +1,5 @@
 //! The map's two system dialogs (Claude, 5 Oct 2026; notes and oracles in
-//! `work/research/modes/map-modes/`):
+//! the project notes):
 //!
 //! - Select → "Are you sure you wish to return to Title Screen?" (MSG 146),
 //!   W+5440 / W+5441 at 0x2378EC..0x237A98 [F]: overlay slot 3 kind 7

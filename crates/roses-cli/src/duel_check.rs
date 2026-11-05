@@ -1,5 +1,5 @@
 //! Private checks: the Bevy-independent duel rules against saved original
-//! states captured through PINE (`work/research/duel/claude-pine`).
+//! states captured through PINE (the project notes).
 #[cfg(test)]
 mod tests {
     use roses_compare::pine::{MemoryWatch, ReadWidth};
@@ -635,7 +635,7 @@ mod tests {
     #[test]
     #[ignore = "Requires the user's executable and private PINE session states"]
     fn private_card_experiments_match_the_original() {
-        // claude-effects/EXPERIMENTS.md: (pre state, unit cell, path, reveal,
+        // the project notes: (pre state, unit cell, path, reveal,
         // post state). Pre states already contain the documented RAM setups.
         let cards = catalogue();
         type Case<'a> = (&'a str, (u8, u8), &'a [(u8, u8)], bool, &'a str);
@@ -693,7 +693,7 @@ mod tests {
     #[test]
     #[ignore = "Requires the user's executable and private PINE session states"]
     fn private_fusions_match_the_original() {
-        // claude-effects/EXPERIMENTS.md F1-F3 (round 14, RAM setups noted there).
+        // the project notes F1-F3 (round 14, RAM setups noted there).
         let cards = catalogue();
         let cell = |column, row| GridPos { column, row };
         // F1: hand 4 + 15 marked in that order, summoned at (2,6) -> 7, cost 6.

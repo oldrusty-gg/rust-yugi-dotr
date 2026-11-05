@@ -14,6 +14,13 @@ fn main() {
     if os == "windows" {
         if env == "msvc" {
             println!("cargo:rustc-link-arg-bins=/STACK:8388608");
+            // The video recorder's Media Foundation DLLs load on first use
+            // (only `--record`), so Windows N without the Media Feature Pack
+            // still starts the game (scripts/release/audit.py checks this).
+            for dll in ["mfplat.dll", "mfreadwrite.dll"] {
+                println!("cargo:rustc-link-arg-bins=/DELAYLOAD:{dll}");
+            }
+            println!("cargo:rustc-link-arg-bins=delayimp.lib");
         } else if env == "gnu" {
             println!("cargo:rustc-link-arg-bins=-Wl,--stack,8388608");
         }

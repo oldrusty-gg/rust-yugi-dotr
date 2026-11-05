@@ -6,7 +6,7 @@
 //! 0x283340, markers and arrows 0x282040). Bevy-independent; the renderer
 //! uploads the frames this module produces.
 //!
-//! Provenance (private research `work/research/duel/claude-end/screen`,
+//! Provenance (private research the project notes,
 //! this pass; nothing here is verified against PS2 hardware):
 //! - [F] 0x1B1830 (box, plate, portrait/picture, name, icon) and the banner
 //!   handlers of 0x1B0120 read from the disassembly; 0x1B8DF0/0x1B8E40 (a
@@ -284,6 +284,20 @@ pub enum BannerKind {
     Rank { demotion: bool, side: u8, card: u16 },
     /// GET CARD (0xC) / GET SPECIAL CARD (0xD): picture, name and "Get!".
     Prize { special: bool, card: u16 },
+}
+
+/// The banner of a two-pad result on one screen: the code and D54. Online (a
+/// port addition) a seat has its own screen and nothing calls it 1P or 2P,
+/// so it reads YOU WIN / YOU LOSE with its own portrait; a draw, a spectator
+/// (`own_side` None) and offline stay as they are.
+pub fn seat_result(code: u8, winner: u8, own_side: Option<u8>) -> (u8, u8) {
+    use roses_core::duel_end::banner;
+    match own_side {
+        Some(own) if code == banner::P1_WIN || code == banner::P2_WIN => {
+            (if winner == own { banner::YOU_WIN } else { banner::YOU_LOSE }, own)
+        }
+        _ => (code, winner),
+    }
 }
 
 /// The primitives of one banner, in the drawer's order. `slide` is c9c
@@ -1519,7 +1533,7 @@ pub fn render_slot_screen(
 // ---------------------------------------------------------------- card blocks
 
 /// A side's persistent card block at the start of a new game, as far as the
-/// capture of the first duel shows it (`claude-end/fixture-767-weevil-after-
+/// capture of the first duel shows it (the project notes
 /// t15`, blocks read before the duel's changes were applied) [H, the new-game
 /// writer is untraced]: one instance per deck card (owner key, random id from
 /// the shared LCG, owned bit; the recent list left empty as the capture
@@ -1560,6 +1574,18 @@ pub fn computer_owner_key(deck_record: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_online_seat_reads_you_win_or_you_lose() {
+        use roses_core::duel_end::banner;
+        assert_eq!(seat_result(banner::P1_WIN, 0, Some(0)), (banner::YOU_WIN, 0));
+        assert_eq!(seat_result(banner::P1_WIN, 0, Some(1)), (banner::YOU_LOSE, 1));
+        assert_eq!(seat_result(banner::P2_WIN, 1, Some(1)), (banner::YOU_WIN, 1));
+        assert_eq!(seat_result(banner::P2_WIN, 1, Some(0)), (banner::YOU_LOSE, 0));
+        // A draw, a spectator and an offline shared screen are unchanged.
+        assert_eq!(seat_result(banner::DRAW, 2, Some(0)), (banner::DRAW, 2));
+        assert_eq!(seat_result(banner::P2_WIN, 1, None), (banner::P2_WIN, 1));
+    }
     use roses_core::slot_machine::{ReelData, SlotMachine};
 
     #[test]

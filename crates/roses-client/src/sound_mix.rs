@@ -1,5 +1,5 @@
 //! A software mixer for the game's sound driver (`KCEJEAST.IRX`, traced in
-//! `claude-audio/DUEL-AUDIO-SCOPE.md`): one music stream and 28 sound-effect
+//! the project notes): one music stream and 28 sound-effect
 //! voices mixed to 48 kHz stereo.
 //! - Music: 24 kHz stereo PCM, each frame output twice (the original's
 //!   frame doubling for the SPU's 48 kHz), looping between its loop points

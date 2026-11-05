@@ -108,6 +108,9 @@ pub struct OnlineState {
     /// `Send` but not `Sync`.
     menu_cell: std::sync::Mutex<OnlineMenu>,
     screen: Option<OnlineScreen>,
+    /// What the frame shows now: an unchanged screen is not drawn and
+    /// uploaded (1 MB) again.
+    drawn: Option<(roses_game::online_menu::View, bool)>,
     image: Option<Handle<Image>>,
     pending: Vec<Key>,
     cards: roses_core::duel::Catalogue,
@@ -292,7 +295,7 @@ fn row_is(r: &roses_game::online_menu::Row, label: &str) -> bool {
         // A seat by its letter or who sits there ("select:E").
         Row::Seat { seat, name, .. } => seat.eq_ignore_ascii_case(label) || name.eq_ignore_ascii_case(label),
         // A live duel by either player's name ("select:Joey").
-        Row::Live { title, .. } => title.eq_ignore_ascii_case(label) || title.split(" vs ").any(|n| n.eq_ignore_ascii_case(label)),
+        Row::Live { title, .. } => title.eq_ignore_ascii_case(label) || title.split([' ', '+']).chain(title.split(" vs ")).any(|n| n.eq_ignore_ascii_case(label)),
     }
 }
 
@@ -514,6 +517,7 @@ pub fn enter_scene(world: &mut World) -> Result<(), String> {
         world.insert_resource(OnlineState {
             menu_cell: std::sync::Mutex::new(menu),
             screen: Some(screen),
+            drawn: None,
             image: None,
             pending: Vec::new(),
             cards: data.catalogue,
@@ -580,6 +584,7 @@ fn setup_scene(
     mut st: ResMut<OnlineState>,
 ) {
     let st = &mut *st;
+    st.drawn = None;
     let view = st.menu().view();
     let Some(screen) = st.screen.as_mut() else { return };
     screen.draw(&view, false);
@@ -797,7 +802,11 @@ fn tick(world: &mut World) {
     }
     let view = st.menu().view();
     let blink = st.updates / 25 % 2 == 0;
-    if let Some(screen) = st.screen.as_mut() {
+    let changed = st.drawn.as_ref().is_none_or(|d| d.0 != view || d.1 != blink);
+    if changed {
+        st.drawn = Some((view.clone(), blink));
+    }
+    if let Some(screen) = st.screen.as_mut().filter(|_| changed) {
         for n in screen.draw(&view, blink) {
             if st.reported.insert(n.clone()) {
                 eprintln!("Online Play: not drawn: {n}");

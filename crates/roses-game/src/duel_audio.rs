@@ -1,5 +1,5 @@
 //! The duel's music and sound effects from `roses import-duel-audio`
-//! (`claude-audio/DUEL-AUDIO-SCOPE.md`): music tracks decoded on demand, the
+//! (the project notes): music tracks decoded on demand, the
 //! system (slot 0) and card (slot 1) banks, and the two battling monsters'
 //! groups (slots 2 / 3, SEGRP.MRG slot = card id, 0x80800 bytes each),
 //! ready for `roses_client::sound_mix::Mixer`.

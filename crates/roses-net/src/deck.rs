@@ -6,7 +6,7 @@
 //! (the server keeps it in its own match record only).
 //!
 //! The rules are the ones the original enforces on a deck that reaches a
-//! duel (research: `modes/claude-deck-editor`, `modes/custom-duel/NOTES.md`):
+//! duel (research: `modes/the project notes, `modes/custom-duel/NOTES.md`):
 //! - Custom Duel's Select Deck commits a deck record only with 40 cards and
 //!   a leader (0x1BB0A0, `roses_core::deck_editor::DeckRecord::is_valid`);
 //! - the editor never puts a fourth copy of one card into a deck (0x214C70,

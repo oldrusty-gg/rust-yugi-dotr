@@ -75,7 +75,7 @@ mod tests {
     #[test]
     #[ignore = "Requires the user's executable (ROSES_TEST_ELF_PATH)"]
     fn private_ritual_requirements_run_from_the_executable() {
-        // Rows of claude-effects/RITUAL.md, whose table came from running
+        // Rows of the project notes, whose table came from running
         // 0x2565B0 in the full interpreter.
         let elf = std::fs::read(std::env::var_os("ROSES_TEST_ELF_PATH").unwrap()).unwrap();
         let table = roses_assets::parse_pal_rituals(&elf).unwrap();

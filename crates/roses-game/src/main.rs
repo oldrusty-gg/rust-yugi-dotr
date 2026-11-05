@@ -743,6 +743,23 @@ fn opening_active(flow: Option<Res<GameFlow>>) -> bool {
     flow.is_none_or(|f| f.scene == GameScene::Opening)
 }
 
+/// The window title a player sees: the scenes write their state there for
+/// development, so a run without `--research-root` shows "Roses", and only
+/// a stop or a movie that cannot play (their reason is for the player, see
+/// KNOWN-ISSUES.txt) stays. `None`: leave the title.
+fn player_title(current: &str) -> Option<&'static str> {
+    let lower = current.to_ascii_lowercase();
+    (current != "Roses" && !lower.contains("stopped") && !lower.contains("cannot play")).then_some("Roses")
+}
+
+fn plain_title(mut windows: Query<&mut Window, With<PrimaryWindow>>) {
+    for mut window in &mut windows {
+        if let Some(title) = player_title(&window.title) {
+            window.title = title.to_owned();
+        }
+    }
+}
+
 fn set_title(world: &mut bevy::ecs::world::World, title: &str) {
     let mut windows = world.query_filtered::<&mut Window, With<PrimaryWindow>>();
     for mut window in windows.iter_mut(world) {
@@ -2211,6 +2228,7 @@ fn update_opening(
     mut sound: Option<ResMut<duel_board_render::DuelSound>>,
     mut title_load: Option<ResMut<TitleLoad>>,
     mut ending: Option<ResMut<ending_render::EndingRun>>,
+    fade: Option<Res<mode_fade::ModeFade>>,
     mut commands: Commands,
 ) {
     // The red ending (11184's tail) has the pad from caption 3028's Cross
@@ -2258,7 +2276,11 @@ fn update_opening(
             sound.cue(roses_game::duel_audio::AudioCue::Se { slot: 0, id, skip: false });
         }
     }
-    if opening.blocked.is_some() || opening.transition.is_some() {
+    // The mode switch's fade counts too (mode -2: the title's update no longer
+    // runs). A press on a menu entry there used to start a second load dialog
+    // that outlived the title (a crash on entering Custom Duel).
+    let leaving = flow.as_ref().is_some_and(|f| f.next.is_some()) || fade.is_some_and(|f| f.leaving());
+    if opening.blocked.is_some() || opening.transition.is_some() || leaving {
         // The original ignores the pad while a scene handoff runs.
         events.clear();
         return;
@@ -3163,7 +3185,7 @@ fn update_world_pose(
                 };
                 // 12156 enters with the rise 12154 started behind its
                 // paintings: W+64 1040, W+53F6 -0x4000 [emu
-                // claude-story-white trace-manawyddan f1318].
+                // the project notes trace-manawyddan f1318].
                 if stage == "map-story-12156" {
                     rig.level = 1040.0;
                     rig.story_angle = -0x4000;
@@ -3360,7 +3382,7 @@ fn setup(
             // 0x1959C8(W, 0x54B0)), so a story entered afresh (Continue
             // after an ending at 10090, the tutorial's return) starts with
             // the pan byte W+5439 = 0 and moves it ±10 per update to the
-            // page's target [F; emu claude-ending run_continue: W+5439 0
+            // page's target [F; emu the project notes run_continue: W+5439 0
             // after 0x21BF50(1)]; the new game's 10040 clears it as well.
             simon_pan: 0,
             level: camera::LEVEL_FULL,
@@ -4476,6 +4498,9 @@ Video recorder (a tool, docs/ADDITIONS.md): add --record <new.mp4> [--record-siz
         )
         .add_systems(FixedUpdate, title_load_tick.run_if(resource_exists::<TitleLoad>))
         .add_systems(FixedUpdate, ending_render::ending_tick.run_if(resource_exists::<ending_render::EndingRun>));
+        if !std::env::args_os().any(|a| a == "--research-root") {
+            app.add_systems(PostUpdate, plain_title);
+        }
     }
     let outcome = app.run();
     if let Some(record) = record_outcome {
@@ -4623,6 +4648,17 @@ mod keyboard_tests {
             opening_button(&event(KeyCode::KeyA, Key::ArrowRight), None),
             Some(Button::Square)
         );
+    }
+
+    #[test]
+    fn a_player_reads_a_plain_title_but_keeps_a_stop_reason() {
+        assert_eq!(player_title("Roses Bevy preview · intro page 1 · 2D stage"), Some("Roses"));
+        assert_eq!(player_title("Roses online duel, seat 0 (revision 12)"), Some("Roses"));
+        assert_eq!(player_title("Roses - Build Deck · lists only (other screens not drawn)"), Some("Roses"));
+        assert_eq!(player_title("Roses"), None);
+        assert_eq!(player_title("Roses - stopped: a rule is not supported"), None);
+        assert_eq!(player_title("Roses duel vs X · STOPPED: unsupported"), None);
+        assert_eq!(player_title("Roses - movie a (index 1) cannot play: gone"), None);
     }
 
     #[test]

@@ -1,5 +1,5 @@
 //! CMODULE c500 (0x1F4), Nightmare Scorpion's "Spellbound!", ported from
-//! the interpreter-matched model `claude-activate/tools/mf_c500_model.py`
+//! the interpreter-matched model the project notes
 //! (MONSTER-EFFECTS-PRESENTATION.md 3.1) [F code; emu: every vertex of the
 //! original's run, <= 0.127 px]:
 //! - u 1-11: a TEXEFF 3 seal (25 x 25 billboard, two mirrored halves, a

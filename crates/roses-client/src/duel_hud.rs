@@ -440,6 +440,9 @@ pub struct HudState {
     pub flash: u16,
     /// 0x1A8C50(30) != 0 (enables hidden face-down cards in the card box).
     pub option_30: bool,
+    /// Online (a port addition): the side this screen belongs to
+    /// (`engine::HudExtra::own_side`). `None` offline.
+    pub own_side: Option<u8>,
     /// Unit records referenced by the fields below.
     pub units: Vec<HudUnit>,
     /// 0x1E4960 per cell (row·7 + col): index into `units`.
@@ -575,6 +578,7 @@ impl Default for HudState {
             d67: 0,
             flash: 0,
             option_30: false,
+            own_side: None,
             units: Vec::new(),
             board: [None; 49],
             terrain: [0; 49],
@@ -786,7 +790,7 @@ pub fn frame(state: &HudState, tables: &HudTables) -> HudFrame {
 /// Overlay slot 3 opened by 0x1E5540 kind 5, 6 or 7 (states 0x14, 0x15,
 /// 0x16): the memory-card dialogs' boxes (`memory_card.rs`). Drawn by
 /// 0x1B0120 cases 0x1B1570 / 0x1B15FC / 0x1B168C through 0x1B1830 [F;
-/// DUEL-MESSAGE-BOX.md §2.3; claude-save/NOTES.md §4].
+/// DUEL-MESSAGE-BOX.md §2.3; the project notes §4].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OverlayKind {
     /// Kind 5: the box centred vertically on 256 + y.
@@ -1817,14 +1821,7 @@ impl Builder<'_> {
         let st = self.st;
         let s = st.sides[usize::from(side)];
         let ctl = [st.sides[0].controller, st.sides[1].controller];
-        let d3c = usize::from(st.d3c & 1);
-        let hide = if ctl[0] < 100 && ctl[1] < 100 {
-            false
-        } else if ctl[d3c] >= 100 {
-            usize::from(side) != d3c
-        } else {
-            usize::from(side) == d3c
-        };
+        let hide = counts_hidden(ctl, st.d3c, side, st.own_side);
         let side_i = i32::from(side);
         self.panel(side_i, side_i, 0, x - 13, y - 15, 37, 13, true);
         let px = x + 3 + if side == 0 { 127 } else { 1 };
@@ -2789,9 +2786,10 @@ impl Builder<'_> {
     #[cfg_attr(not(feature = "online"), allow(dead_code))]
     fn name_plate(&mut self, plate: Descriptor, name: &[u8], x: i32, y: i32) {
         let mut text: Vec<u8> = name.iter().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { b' ' }).collect();
-        // No wider than the plate's room (a 12-letter account name fits): a
-        // longer name (a character's, "PEGASUS CRAWFORD") keeps its first
-        // word, else as many letters as fit.
+        // No wider than the plate's room: the stats beside the portrait leave
+        // about 64 pixels, and this is already the smallest gold font (about
+        // 8 letters; 12 take 91 to 108). A longer name keeps its first word
+        // (a character's, "PEGASUS CRAWFORD"), else as many letters as fit.
         const ROOM: i32 = 64;
         if self.gold_measure(1, 1, &text).0 > ROOM {
             if let Some(first) = text.split(|&c| c == b' ').find(|w| !w.is_empty()).map(<[u8]>::to_vec) {
@@ -3480,6 +3478,25 @@ pub fn render_primitives_layer(
     (rgba, skipped)
 }
 
+/// Whether a plate's stars, monster and magic counts read "??". The
+/// original's rule follows d3c: with two human players on one screen, only
+/// the acting side's show. A seat on its own screen (online, a port
+/// addition) always reads its own and never the other seat's, as against
+/// the computer.
+fn counts_hidden(controllers: [u8; 2], d3c: u8, side: u8, own_side: Option<u8>) -> bool {
+    let d3c = usize::from(d3c & 1);
+    if let Some(own) = own_side {
+        return side != own;
+    }
+    if controllers[0] < 100 && controllers[1] < 100 {
+        false
+    } else if controllers[d3c] >= 100 {
+        usize::from(side) != d3c
+    } else {
+        usize::from(side) == d3c
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3811,6 +3828,25 @@ mod tests {
             }
         }
         assert_eq!(build(&st, &t), f.prims);
+    }
+
+    #[test]
+    fn a_seat_reads_its_own_plate_on_either_turn_and_offline_keeps_the_rule() {
+        let pads = [100, 101];
+        for d3c in [0, 1] {
+            for own in [0, 1] {
+                assert!(!counts_hidden(pads, d3c, own, Some(own)));
+                assert!(counts_hidden(pads, d3c, own ^ 1, Some(own)));
+            }
+            // A spectator or an offline shared screen: the acting side's.
+            assert!(!counts_hidden(pads, d3c, d3c, None));
+            assert!(counts_hidden(pads, d3c, d3c ^ 1, None));
+        }
+        // Offline against the computer, on its turn and on the player's.
+        assert!(!counts_hidden([100, 2], 0, 0, None));
+        assert!(counts_hidden([100, 2], 0, 1, None));
+        assert!(counts_hidden([100, 2], 1, 1, None));
+        assert!(!counts_hidden([2, 3], 0, 1, None));
     }
 
     #[test]

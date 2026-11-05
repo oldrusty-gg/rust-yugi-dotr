@@ -1,6 +1,6 @@
 //! The memory-card save file of PAL SLES_515.79 (`BESLES-51579/BESLES-51579`),
 //! as the card layer builds and checks it (Claude, 4 Oct 2026; notes in
-//! `work/research/story/claude-save/NOTES.md` §3).
+//! the project notes §3).
 //!
 //! Layout (0x100F0 bytes, one file per memory card) [F 0x23DD4C (write),
 //! 0x23F600 (read); emu: a file written by the game's own code in the EE
@@ -186,7 +186,7 @@ mod tests {
     }
 
     /// A file written by the original's own save code (EE interpreter with
-    /// the virtual card: `work/research/story/claude-save/tools/run_save.py`).
+    /// the virtual card: the project notes).
     /// Set ROSES_SAVE_ORACLE to that file; skipped otherwise (private data).
     #[test]
     fn private_a_file_written_by_the_game_checks_and_round_trips() {

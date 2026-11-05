@@ -1,6 +1,6 @@
 //! Talking-portrait ("face animation") engine of PAL SLES_515.79: the small
 //! speaker portraits of the campaign map's hover panel and the story panels.
-//! Source facts (private research `story/claude-faces/FACES.md`; [F] code or
+//! Source facts (private research `story/the project notes; [F] code or
 //! data, [emu] EE interpreter oracle `run_faces.py`):
 //!
 //! - Requests (0x247310): 8 bytes {slot (255 = allocate), speaker,
@@ -348,7 +348,7 @@ impl NewlibRand {
 /// Story portrait assets → face-table speaker = TEXANM record = name id −
 /// 196 (Simon 197 → 1, Seto 2, Pegasus 10, Richard 11, Mako 15, Yugi 20,
 /// Manawyddan 21) [emu: the panels' 0x247310 requests, research
-/// `story/claude-faces/NOTES.md`]. Each asset is the whole 256×256 record.
+/// `story/the project notes]. Each asset is the whole 256×256 record.
 pub const STORY_PORTRAITS: [(&str, u8); 7] = [
     ("simon-small-portrait", 1),
     ("seto-small-portrait", 2),

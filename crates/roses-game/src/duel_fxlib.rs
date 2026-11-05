@@ -1,5 +1,5 @@
 //! Shared pieces of the c555 / c505 / c546 / c507 / c533 / c537 ports, as
-//! the reference models' `tools/mf_fxlib.py` (`claude-activate/NEWLY-ALLOWED.md`
+//! the reference models' `tools/mf_fxlib.py` (the project notes
 //! sections 9-15): the EE's table trig (0x20ACC0 tsin, 0x20AD90 / 0x20AEA0
 //! cosf / sinf, 0x1A74D8 atan2 -> 16-bit angle), 0x20BDA0 rotations, 0x20C540
 //! row-vector products, 0x103EC0 homing, the GS 12.4 truncated projection of
@@ -273,7 +273,7 @@ pub(crate) fn quad(out: &mut Vec<FxTri>, p: [[f32; 2]; 4], uv: [[f32; 2]; 4], c:
     out.push(FxTri { screen: [p[1], p[3], p[2]], uv: [uv[1], uv[3], uv[2]], colour: [c[1], c[3], c[2]], textured, sheet });
 }
 
-/// Texel UVs normalised by a sheet of `size` (`claude-units/texeff/NNN.png`).
+/// Texel UVs normalised by a sheet of `size` (the project notes).
 pub(crate) fn uvn(p: [[i32; 2]; 4], size: [i32; 2]) -> [[f32; 2]; 4] {
     p.map(|[u, v]| [u as f32 / size[0] as f32, v as f32 / size[1] as f32])
 }

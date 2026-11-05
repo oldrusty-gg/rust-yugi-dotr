@@ -1,5 +1,5 @@
 //! CMODULE c560 (0x230), the moth evolution (event 0x3C, 0x26ABF0), as
-//! specified in `claude-activate/C560-EVOLUTION.md` [F code; emu: the
+//! specified in the project notes [F code; emu: the
 //! reference model `tools/mf_c560_model.py` equals the interpreter's
 //! primitives to 0.166 px]. Every layer is screen-space (nodes at view
 //! (0, 0, 800), the screen centre), additive, drawn over the scene:

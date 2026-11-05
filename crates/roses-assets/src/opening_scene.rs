@@ -6,7 +6,7 @@
 //!
 //! Sources (PAL SLES_515.79 EE addresses, all traced from the executable and
 //! replayed bit-exactly against a saved memory image, see
-//! `work/research/story/claude-opening-disc/SIMON-SCENE.md`):
+//! the project notes):
 //!
 //! * World models: the story setup calls the pack loader `0x1E91B0(kind 3,
 //!   sub 4)` (call site 0x21C0BC..0x21C0C4, the new-game path that then selects

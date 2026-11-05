@@ -1,5 +1,5 @@
 //! The deck editor (mode 6) of PAL SLES_515.79 as a pure, frame-stepped
-//! model (private research `modes/claude-deck-editor/DECK-EDITOR.md`,
+//! model (private research `modes/the project notes,
 //! functions 0x1B9100 init, 0x1B94B0 update, 0x1BB0A0–0x1BB400 helpers,
 //! 0x214560–0x216580 card-block operations, 0x251D50/0x251F40
 //! reincarnation, 0x1BB110 passwords).

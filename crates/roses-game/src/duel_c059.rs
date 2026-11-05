@@ -1,5 +1,5 @@
 //! CMODULE c059 (0x3B), the ritual presentation of event 0x38 (handler
-//! 0x26D4B0), as specified in `claude-activate/C059-RITUAL.md` [F code; emu:
+//! 0x26D4B0), as specified in the project notes [F code; emu:
 //! the reference model `tools/mf_c059_model.py` equals the interpreter's
 //! primitives to 0.063 px, return codes, light bytes, rand calls and card
 //! objects included]. 216 updates; returns 2 at u 134 (the handler removes
@@ -351,7 +351,7 @@ fn uvset(r: [i32; 4], mode: u8) -> [[i32; 2]; 4] {
     if mode == 0 { [[u, v], [u + w, v], [u, v + h], [u + w, v + h]] } else { [[u, v + h], [u, v], [u + w, v + h], [u + w, v]] }
 }
 
-/// TEXEFF sheet sizes (`claude-units/texeff/NNN.png`).
+/// TEXEFF sheet sizes (the project notes).
 fn sheet_size(sheet: u8) -> [f32; 2] {
     match sheet {
         1 | 11 => [128.0, 64.0],

@@ -1,5 +1,5 @@
 //! Monster flip effects as the original presents them
-//! (`claude-activate/MONSTER-EFFECTS-PRESENTATION.md` 2) [F handlers]: the
+//! (the project notes 2) [F handlers]: the
 //! revealed card turns over (8 updates) and its model grows in (16), then
 //! the effect's handler runs on the board before any battle scene: the
 //! board dims (0x80 -> 0x30 by 15 per update), the units that are not
@@ -29,7 +29,7 @@
 //! | Lawbook | Solomon's Lawbook (event 0x21) | none | c533 e 2 (the board light) | none | 95 |
 //! | DarkHole | Dark Hole (event 4, 0x258C60) | a reacting White Hole's / Royal Decree's name e 1..38 | c602 e 9 per reaction; c021 e c+1 (c = 1, or 39 after a reaction) | cut to the reacting trap e 2; overview 20 e c+1; 90-degree orbits (60 U) e c+23+60j; back e c+L+1 | c+L+18 (L = c021's length) |
 //!
-//! The moth's countdown and evolution: `claude-activate/MOTH-EVOLUTION.md`
+//! The moth's countdown and evolution: the project notes
 //! 1-2 [F]; the evolution swaps the old card for the new face-down one at
 //! E+105 under c560's flash (`C560-EVOLUTION.md`).
 use crate::duel_overlay::OverlayInput;

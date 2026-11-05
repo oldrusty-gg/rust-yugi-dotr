@@ -1,5 +1,5 @@
 //! CMODULE c557 (0x22D) "Power decrease", as traced in
-//! `claude-activate/FLIP-AND-VICTIMS.md` 5 [F code; emu: counts and
+//! the project notes 5 [F code; emu: counts and
 //! alphas equal to the interpreter, sparks and smoke to 0.063 px, the
 //! speed lines within 0.38 px on screen]: 64 red speed lines out of the
 //! victim (world axes, each sent twice), a subtractive dark purple puff

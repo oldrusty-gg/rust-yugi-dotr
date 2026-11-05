@@ -1,6 +1,6 @@
 //! The Immortal of Thunder 536 (entry-2 aura 0x13, filter 0x31) and Mirror
 //! Force (full-range trap type 4), Raigeki 700 with Anti-Raigeki (0x50)
-//! (claude-effects/E2-536-TRAP-0x4.md; emu cases I, MF and RG). Synthetic
+//! (the project notes; emu cases I, MF and RG). Synthetic
 //! cards shaped like the originals; Raigeki keeps its real id because the
 //! builder binds event 5 to it.
 

@@ -1063,7 +1063,7 @@ fn map_tick(
         };
     }
     // SYSTEM → SAVE: while the card dialog runs the map takes no input (the
-    // cursor stays on the icon [emu claude-save save-move]); the dialog
+    // cursor stays on the icon [emu the project notes save-move]); the dialog
     // updates within the map update (0x237554).
     if runtime.card.is_some() {
         pad = Pad::NONE;
@@ -2030,7 +2030,7 @@ pub fn map_story_request(world: &mut World) -> Option<i16> {
 /// map update and its overlay is the present pass's cover canvas, over the
 /// map and its HUD (sliding out under it). The map keeps drawing; black
 /// fills, paintings and the closed letterbox of the overlay cover it where
-/// the original's do [emu `claude-map-behind/NOTES.md`]. When the chain
+/// the original's do [emu the project notes]. When the chain
 /// reaches the map's window event (11124, 11149) the map plays it in place
 /// (`MapModel::end_story`).
 #[derive(Resource)]

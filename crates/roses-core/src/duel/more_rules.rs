@@ -2,7 +2,7 @@
 //! pick), Dokurorider 128 (entry-1 type 2, terrain on entry), Call of the
 //! Haunted 745 (magic type 0x36, a kind rewrite) and Fissure 726 (magic type
 //! 4 / hi 0, filter 0x20 = the weakest monster). Private notes:
-//! `claude-effects/MORE-RULES-305-128-745-726.md`.
+//! the project notes.
 
 use super::*;
 

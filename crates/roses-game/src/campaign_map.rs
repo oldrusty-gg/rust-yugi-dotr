@@ -5,7 +5,7 @@
 //! images), hash-checked on load. The frame logic is
 //! `roses_client::campaign_map::MapModel`; this module converts the models,
 //! places them and projects them with the traced map camera. Sources (PAL EE
-//! addresses, private research `story/claude-campaign-map/MAP.md`):
+//! addresses, private research `story/the project notes):
 //!
 //! - camera eye = target + (0, 112, 112) looking at the target on y = 0, GS
 //!   projection x = 256 + 800·x/z, y = 256 + 1074.2855·y/z (as the board);
@@ -1008,7 +1008,7 @@ mod private_tests {
     /// t = 11, obj+0x10 (0, 0x8000, 0), obj+0x20 (0, 58542, 0), camera
     /// target (-30, 40)) through the map view: the emulator's VU1 list
     /// matrices put its 6,914 vertices at canvas x 217.3..288.2, y
-    /// 118.9..225.2 (GS - 1792) [emu, story/claude-campaign-map/figure-cmp].
+    /// 118.9..225.2 (GS - 1792) [emu, story/the project notes
     #[test]
     #[ignore = "Requires the private models import (ROSES_DUEL_MODELS_MANIFEST)"]
     fn private_leader_figure_projects_like_the_emulated_frame() {

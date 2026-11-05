@@ -1,6 +1,6 @@
 //! CMODULE c026 (0x1A), Change of Heart board-wide (event 0x1A, handler
 //! 0x25E300, launched at E+1), as specified in
-//! `claude-activate/C026-C027-CHANGE-OF-HEART.md` section 3 [F code; emu: the
+//! the project notes section 3 [F code; emu: the
 //! reference model `tools/mf_c026_model.py` equals the interpreter's
 //! primitives to 0.0628 px in two runs]. Anchored at the camera's look-at
 //! point T (re-read every update: always the screen centre), all additive,

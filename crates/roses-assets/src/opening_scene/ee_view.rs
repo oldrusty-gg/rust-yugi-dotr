@@ -15,7 +15,7 @@
 //! eye. The original then draws the board, the units and the versus cards
 //! through that matrix; this port reproduces it bit for bit (checked against
 //! the game's own routine run with PCSX2's float rules,
-//! `work/research/duel/claude-units/oracle_view_table.py`).
+//! the project notes).
 use super::ee_float::{ee, sqrtf, vu};
 use super::{Matrix, Qword};
 use crate::Result;

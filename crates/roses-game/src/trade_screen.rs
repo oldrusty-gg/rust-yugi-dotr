@@ -2,7 +2,7 @@
 //! HUD-leaf calls (`duel_hud::MenuCall`), Bevy-free; the scene is
 //! `trade_render.rs` in the binary (Claude, 6 Oct 2026).
 //!
-//! Provenance (`work/research/modes/two-player/NOTES.md` §3,
+//! Provenance (the project notes §3,
 //! `d_trade_1c3050.txt`): 0x1C47F0 background, 0x1C4C50 title, 0x1C4D20
 //! side panel, 0x1C5950 card row, 0x1C63A0 cursor and hint bar, 0x1C66C0
 //! READY, 0x1C67D0 / 0x1C6980 / 0x1C6B30 the question and refusal boxes
@@ -478,7 +478,7 @@ fn banner_box(b: &mut B<'_>, message: u16, cx: i32, top: i32, width: i32, min_h:
 }
 
 /// 0x1B82C0(size, flags 3).
-fn gold_measure(t: &HudTables, size: usize, text: &[u8]) -> (i32, i32) {
+pub(crate) fn gold_measure(t: &HudTables, size: usize, text: &[u8]) -> (i32, i32) {
     let (cw, lh) = t.font_sizes[size];
     let mut w = 0;
     for &ch in text {

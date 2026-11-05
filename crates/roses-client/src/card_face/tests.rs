@@ -322,7 +322,7 @@ mod private_tests {
     #[test]
     #[ignore = "Requires the private duel import and the VRAM text page (ROSES_DUEL_IMPORT, ROSES_CARD_FACE_TEXT_PAGE)"]
     fn private_text_page_rows_match_the_original_vram() {
-        // `duel/claude-card-face/font-page-437.alpha`: 640×220 GS alpha of the
+        // `duel/the project notes: 640×220 GS alpha of the
         // text page (TBP 10496) in savestate 437-deck1, whose last name is
         // card 612.
         let exe = std::fs::read(import().join("SLES_515.79")).unwrap();

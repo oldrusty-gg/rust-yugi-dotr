@@ -10,7 +10,7 @@
 //! code the IOP driver's pitch table (`KCEJEAST.IRX`) and the card -> SE
 //! group table (EE 0x2CE024). Nothing here may be distributed.
 //!
-//! Traced in `work/research/duel/claude-audio/DUEL-AUDIO-SCOPE.md`.
+//! Traced in the project notes.
 use crate::{emit_json, open_pal, Result};
 use roses_client::campaign_map::EE_TO_FILE;
 use sha2::{Digest, Sha256};

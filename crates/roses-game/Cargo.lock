@@ -3369,25 +3369,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "roses-game"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "naga",
- "platform-video",
- "roses-assets",
- "roses-client",
- "roses-core",
- "roses-disc",
- "roses-ee",
- "roses-net",
- "roses-server",
- "serde",
- "serde_json",
- "sha2",
-]
-
-[[package]]
 name = "roses-client"
 version = "0.1.0"
 dependencies = [
@@ -3423,6 +3404,34 @@ name = "roses-ee"
 version = "0.1.0"
 dependencies = [
  "roses-assets",
+ "roses-fx",
+]
+
+[[package]]
+name = "roses-fx"
+version = "0.1.0"
+dependencies = [
+ "roses-assets",
+]
+
+[[package]]
+name = "roses-game"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "naga",
+ "platform-video",
+ "roses-assets",
+ "roses-client",
+ "roses-core",
+ "roses-disc",
+ "roses-ee",
+ "roses-fx",
+ "roses-net",
+ "roses-server",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

@@ -16,7 +16,7 @@ use std::path::Path;
 const MOVIE_SHA256: &str = "649bbb1683c1d3525990d939f1420ccefff946e0380109ff9b4c5cb0150d0c52";
 
 /// A PSS movie of the PAL disc and what the built-in decoder must get from
-/// it (measured: `work/research/movie/claude-pss/NOTES.md` §1).
+/// it (measured: the project notes §1).
 pub(crate) struct DiscMovie {
     pub disc_path: &'static str,
     pub sha256: &'static str,

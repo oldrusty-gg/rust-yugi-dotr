@@ -1,6 +1,6 @@
 //! The leader figure on the campaign map: unit object 30, placed every
 //! frame by 0x22AE20 (called last in the node pass 0x22A4D0). Source facts
-//! (PAL SLES_515.79, private notes `story/claude-campaign-map/FIGURE.md`):
+//! (PAL SLES_515.79, private notes `story/the project notes):
 //!
 //! - Model [F]: map init 0x21C1A4 loads the player's current-deck leader
 //!   (0x215160(0, 0x215040(0)), also W+5406) into object 30 via 0x1DF410 /

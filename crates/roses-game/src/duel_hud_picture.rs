@@ -1,4 +1,4 @@
-//! The duel HUD's terrain picture (`claude-screen/hud/TERRAIN-PICTURE.md`):
+//! The duel HUD's terrain picture (the project notes):
 //! 0x1B4370 renders the board terrain model of the cursor cell's code T
 //! (`terrain-{T}`, the board tiles' own meshes and texture) into render
 //! target 0x2000 every HUD frame, and the HUD's RT sprite then shows it in
@@ -160,7 +160,7 @@ mod private_tests {
 
     /// Writes the forest picture at the round-2 dump's angle (0x1200, pitch
     /// 45 degrees) to `ROSES_PICTURE_OUT` for comparison with the decoded
-    /// RT of dump draws 6931/6932 (`claude-screen/hud/terrain-rt-2000.png`).
+    /// RT of dump draws 6931/6932 (the project notes).
     #[test]
     #[ignore = "research print; needs ROSES_BOARD_MANIFEST"]
     fn print_forest_picture() {

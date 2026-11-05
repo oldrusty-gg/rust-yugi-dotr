@@ -1,4 +1,4 @@
-//! Effects ported by the refusal sweep (claude-effects/REFUSALS-SWEEP.md):
+//! Effects ported by the refusal sweep (the project notes):
 //! synthetic cards with the originals' effect words, checked against the
 //! emulator cases named in each test.
 

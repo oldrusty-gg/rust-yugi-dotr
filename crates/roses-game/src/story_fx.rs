@@ -1,16 +1,20 @@
 //! The Stonehenge story events' light effect c401 (CMODULE 0x191, launched
 //! by 11162 / 12132 on the update after their C2 update [emu trace-seto-cam
-//! f773, white trace-brest f811]; the same module as Simon's 10040) run as
-//! original code by the effect runner with the story camera mirrored, and
-//! its light beam rasterised on the CPU into an additive layer. Bevy-free.
+//! f773, white trace-brest f811]; the same module as Simon's 10040),
+//! hand-ported to plain Rust (`roses_fx::c401`, equal to the original
+//! update for update, bit for bit: `roses_ee` test `parity_cmodule`, the
+//! test oracle, not linked into the game), with the story camera mirrored, and its light beam
+//! rasterised on the CPU into an additive layer. Bevy-free.
 //!
-//! Source [F `story/claude-flash/FINDINGS.md`]: c401 draws a full-screen
+//! Source [F `story/the project notes]: c401 draws a full-screen
 //! additive flash from task frame 32 (the port draws it natively, rows
 //! 144..368, `story_effects`), 32 textured rays from (0, 800, 0) (TEXEVE
 //! record 0x1A, additive, from frame 16 for 64 frames) and sets scene light
 //! slot 7 (not drawn). Here the beam's primitives are taken from the run;
 //! the full-screen sprite is skipped (drawn natively).
-use roses_ee::bmodule::{AttackEffect, CameraMirror, EffectTextures, GsPrim, TextureKey};
+use crate::duel_bmodule::guarded;
+use roses_fx::EffectPort;
+use roses_fx::types::{CameraMirror, EffectTextures, GsPrim, TextureKey};
 
 /// CMODULE program of the flash and beam.
 pub const C401: u16 = 0x191;
@@ -27,7 +31,9 @@ pub fn texeve_record(texeve: &[u8], id: usize) -> Option<Vec<u8>> {
 
 /// A running c401.
 pub struct LightEffect {
-    effect: std::sync::Mutex<AttackEffect>,
+    effect: std::sync::Mutex<roses_fx::c401::C401>,
+    /// The port panicked (`duel_bmodule::caught`).
+    stopped: bool,
     pub updates: u32,
     pub prims: Vec<GsPrim>,
 }
@@ -41,28 +47,28 @@ impl LightEffect {
             .filter_map(|&id| texeve_record(texeve, id as usize).map(|b| (8, id, b)))
             .collect::<Vec<_>>();
         let textures = EffectTextures { texeff: Vec::new(), own: Vec::new(), other };
-        let effect = AttackEffect::load_cmodule(executable, cmodule, C401, [0, 0], &textures).ok()??;
-        let mut fx = Self { effect: std::sync::Mutex::new(effect), updates: 0, prims: Vec::new() };
-        fx.effect.get_mut().ok()?.update(&crate::duel_opening_fx::BoardWorld { camera }).ok()?;
+        let effect = guarded("c401: the light effect", || roses_fx::c401::C401::load(executable, cmodule, [0, 0], &textures)).ok()??;
+        let mut fx = Self { effect: std::sync::Mutex::new(effect), stopped: false, updates: 0, prims: Vec::new() };
+        let effect = fx.effect.get_mut().ok()?;
+        guarded("c401: the light effect", || effect.update(&crate::duel_opening_fx::BoardWorld { camera })).ok()?;
         Some(fx)
     }
 
     /// One update; false once the module has ended.
     pub fn update(&mut self, camera: CameraMirror) -> bool {
         let Ok(effect) = self.effect.get_mut() else { return false };
-        if effect.finished {
+        if self.stopped || effect.finished() {
             self.prims.clear();
             return false;
         }
-        match effect.update(&crate::duel_opening_fx::BoardWorld { camera }) {
+        match guarded("c401: the light effect", || effect.update(&crate::duel_opening_fx::BoardWorld { camera })) {
             Ok(u) => {
                 self.updates += 1;
                 self.prims = u.prims;
                 true
             }
-            Err(e) => {
-                eprintln!("c401: the light effect stopped: {}", e.0);
-                effect.finished = true;
+            Err(_) => {
+                self.stopped = true;
                 self.prims.clear();
                 false
             }
@@ -187,7 +193,7 @@ pub fn rasterise<'a>(prims: impl Iterator<Item = &'a GsPrim>, texture: &Texture,
                     if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
                         continue;
                     }
-                    let lerp = |f: &dyn Fn(&roses_ee::bmodule::GsVertex) -> f32| w0 * f(a) + w1 * f(b) + w2 * f(c);
+                    let lerp = |f: &dyn Fn(&roses_fx::types::GsVertex) -> f32| w0 * f(a) + w1 * f(b) + w2 * f(c);
                     let k = (y as usize - top) * WIDTH + x as usize;
                     if depth.is_some_and(|d| lerp(&|v| v.q) < d[k]) {
                         continue;

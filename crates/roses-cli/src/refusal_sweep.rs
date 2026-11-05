@@ -3,7 +3,7 @@
 //! Plays many computer-vs-computer sessions through `DuelSession` and tallies
 //! every `DuelError::Unsupported` outcome by message, so the refusals real
 //! players can reach are found and ported in order of frequency. Notes:
-//! `work/research/duel/claude-effects/REFUSALS-SWEEP.md`.
+//! the project notes.
 //!
 //! Player decks are the ones a real player can field:
 //! - every starter deck the name-derived deck select can offer (records

@@ -16,7 +16,7 @@
 //! All of this was established by replaying the game's own camera/light/model
 //! routines from a saved PAL memory image inside an interpreter with these
 //! rules, which reproduced every captured matrix bit for bit
-//! (`work/research/story/claude-opening-disc/tools/simon_oracle.py`).
+//! (the project notes).
 //! Real R5900/VU0 hardware is not IEEE and is not modelled here.
 use crate::{Error, Result};
 

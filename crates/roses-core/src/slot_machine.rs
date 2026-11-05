@@ -1,7 +1,7 @@
 //! The reward slot machine after a won campaign duel (mode 0xF "Slot
 //! Machine", MSG 98), as a pure frame-stepped model.
 //!
-//! Sources (PAL SLES_515.79, private research `claude-end/DUEL-END.md` §3 and
+//! Sources (PAL SLES_515.79, private research the project notes §3 and
 //! the interpreter runs `run2.py`/`run3.py`; EE addresses): reel data
 //! 0x252980/0x252C90, mode init 0x284E60, spin start 0x281580, per-frame
 //! input 0x2852B0 (the mode update) followed by physics 0x2849A0 (the draw

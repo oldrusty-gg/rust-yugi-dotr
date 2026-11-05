@@ -23,6 +23,8 @@ use roses_assets::opening_scene::ee_float::{ee, vu};
 
 pub mod bmodule;
 pub mod effects;
+pub mod fnparity;
+pub mod parity;
 
 pub const MAIN_BYTES: usize = 32 * 1024 * 1024;
 pub const SCRATCH_BYTES: usize = 16 * 1024;
@@ -1672,5 +1674,37 @@ mod tests {
         cpu.write_u32(0x7000_0010, 0xAABB_CCDD);
         assert_eq!(cpu.read_u32(0x7000_0010), 0xAABB_CCDD);
         assert_eq!(cpu.read_u32(0x0000_0010), 0);
+    }
+}
+
+/// The interpreter's memory as the ports' [`roses_fx::bus::Bus`], so the
+/// same setup code ([`roses_fx::world`]) writes both.
+impl roses_fx::bus::Bus for Cpu {
+    fn read_u8(&mut self, addr: u32) -> u8 {
+        Cpu::read_u8(self, addr)
+    }
+    fn write_u8(&mut self, addr: u32, v: u8) {
+        Cpu::write_u8(self, addr, v)
+    }
+    fn read_u16(&mut self, addr: u32) -> u16 {
+        Cpu::read_u16(self, addr)
+    }
+    fn read_u32(&mut self, addr: u32) -> u32 {
+        Cpu::read_u32(self, addr)
+    }
+    fn read_u64(&mut self, addr: u32) -> u64 {
+        Cpu::read_u64(self, addr)
+    }
+    fn write_u16(&mut self, addr: u32, v: u16) {
+        Cpu::write_u16(self, addr, v)
+    }
+    fn write_u32(&mut self, addr: u32, v: u32) {
+        Cpu::write_u32(self, addr, v)
+    }
+    fn write_u64(&mut self, addr: u32, v: u64) {
+        Cpu::write_u64(self, addr, v)
+    }
+    fn load(&mut self, addr: u32, bytes: &[u8]) {
+        Cpu::load(self, addr, bytes)
     }
 }

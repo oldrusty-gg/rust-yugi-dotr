@@ -1,7 +1,7 @@
 //! Drawing attack effects: a stateful runner for a BMODULE program whose
 //! boundary is the port's own battle state (option A of
 //! `duel/EFFECTS-DRAWING-AUDIT.md`; research in
-//! `duel/claude-bmodule/NOTES.md`).
+//! `duel/the project notes).
 //!
 //! The module and every executable helper it calls run as original code in
 //! the interpreter, from the user's executable and BMODULE record. What the
@@ -33,6 +33,9 @@
 //! node origin under the object matrix at the current motion time, flags
 //! +0x20C = 0xE2.
 use crate::{Cpu, Hook, Stop};
+pub use roses_fx::types::*;
+pub use roses_fx::world::{OBJECT_INDEX, OBJECT_RECORD};
+use roses_fx::world::{CAMERA_RECORD, LINKED_TYPE};
 use std::collections::BTreeMap;
 
 pub use crate::effects::{DATA_AREA, LINK_ADDRESS, RECORD_BYTES};
@@ -49,25 +52,8 @@ const STEPS_PER_CALL: u64 = 300_000_000;
 
 /// Object table and the two arena objects (indices and records as in the
 /// footage: attacker 25 at 0x1FE42D0, defender 20 at 0x1FE3830).
-const OBJECT_TABLE: u32 = 0x002D_E2C0;
-pub const OBJECT_INDEX: [u8; 2] = [25, 20];
-pub const OBJECT_RECORD: [u32; 2] = [0x01FE_42D0, 0x01FE_3830];
-const OBJECT_BYTES: u32 = 0x220;
-const LINKED_TYPE: u32 = 0x002D_F5A0;
-const CAMERA_POINTER: u32 = 0x002D_F5C0;
-const CAMERA_OBJECT: u32 = 0x01FE_04E0;
-const CAMERA_STACK_INDEX: u32 = 0x002E_D6C0;
-const CAMERA_RECORD: u32 = 0x002E_D720;
-const PACKET_POINTER: u32 = 0x002E_9650;
-const PACKET_SCRATCH: u32 = 0x01F4_0000;
 const LAYER_SCRATCH: u32 = 0x01F9_0000;
 /// Effect textures are copied here (RH2 records with patched TEX0).
-const TEXTURE_AREA: u32 = 0x01A0_0000;
-const TEXTURE_AREA_END: u32 = 0x01DF_0000;
-
-/// The PAL frame's projection (distance d; y keeps the pixel aspect
-/// 1074.2855 / 800; z rows as the arena's record) [emu 0x2ED7A0].
-const ASPECT_Y: f32 = 1_074.285_5 / 800.0;
 
 /// Boundary functions a module may call that this shim does not
 /// implement: they are answered (`Some`) or run as original code (`None`)
@@ -95,6 +81,13 @@ const BOUNDARY: &[(u32, &str, Option<u64>)] = &[
     (0x001F_8100, "outcome 0x1F8100", None),
     (0x001F_8470, "camera track 0x1F8470", None),
 ];
+
+/// The runner's name for a boundary call at `pc` (reported in
+/// [`EffectUpdate::boundary`]), if it is one (helper C6: the
+/// function-level harness compares them).
+pub fn boundary_name(pc: u32) -> Option<&'static str> {
+    BOUNDARY.iter().find(|b| b.0 == pc).map(|b| b.1)
+}
 
 /// The camera a pre-model callback left (see [`UnitRender::pre_vp`]): kept
 /// when it differs from the battle camera's record.
@@ -178,445 +171,7 @@ pub fn fixsfsi(bits: u32) -> i32 {
     if negative { v.wrapping_neg() } else { v }
 }
 
-/// A texture an effect draws with.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum TextureKey {
-    /// TEXEFF.MRG record (type 4).
-    TexEff(u8),
-    /// The attacker's effect RH2 in its MONSTER.MRG slot, obj+0x144 + 4 *
-    /// slot (type 5).
-    Own(u8),
-    /// The other display buffer (TBP 0 / 0x800, PSMCT16S 512 x 512): the
-    /// previous frame [F 0x209640 / 0x207FC0; emu B125].
-    Frame,
-    /// The offscreen render target at TBP 0x2000 holding unit `role` (0 the
-    /// attacker, 1 its target) as 0x1F0FD0 last drew it there (the
-    /// afterimage draws 0x1F8270 / 0x1F8280 / 0x1F82B0) [F; emu card 21].
-    UnitRt(u8),
-}
-
-/// TBP0 of the offscreen target the unit-model extra draws render into.
-pub const UNIT_RT_TBP: u16 = 0x2000;
-/// Its TEX0: TBP 0x2000, TBW 8, PSMCT16, TW = TH = 9, TCC 1, CLD 1.
-pub const UNIT_RT_TEX0: u64 = 0x2000 | (8 << 14) | (2 << 20) | (9 << 26) | (9 << 30) | (1 << 34) | (1 << 61);
-
-impl TextureKey {
-    /// The TBP0 of the texture (GS block units): the shim's own for TEXEFF
-    /// (0x3400 + 0x40 k) and the attacker's RH2s (0x3800 + 0x40 e), clear of
-    /// the frame buffers and render targets the game itself computes.
-    pub fn tbp(self) -> u16 {
-        match self {
-            Self::TexEff(k) => 0x3400 + 0x40 * u16::from(k & 0xF),
-            Self::Own(k) => 0x3800 + 0x40 * u16::from(k & 7),
-            Self::Frame => 0,
-            Self::UnitRt(_) => UNIT_RT_TBP,
-        }
-    }
-    /// The shim's texture or a frame buffer at `tbp` (a render target needs
-    /// the role, see [`EffectUpdate`]).
-    pub fn from_tbp(tbp: u16) -> Option<Self> {
-        match tbp {
-            0 | 0x800 => Some(Self::Frame),
-            0x3400..=0x37C0 if tbp & 0x3F == 0 => Some(Self::TexEff(((tbp - 0x3400) / 0x40) as u8)),
-            0x3800..=0x39C0 if tbp & 0x3F == 0 => Some(Self::Own(((tbp - 0x3800) / 0x40) as u8)),
-            _ => None,
-        }
-    }
-}
-
-/// RH2 records the module may ask for (from the user's import).
-#[derive(Clone, Debug, Default)]
-pub struct EffectTextures {
-    /// TEXEFF.MRG records by id (type 4).
-    pub texeff: Vec<Option<Vec<u8>>>,
-    /// The attacker's effect RH2s by effect slot 0..8 (type 5).
-    pub own: Vec<Option<Vec<u8>>>,
-    /// Other archives' records a C module loads, as (type, record, RH2)
-    /// (e.g. c401's TEXEVE records, type 8): placed as `TextureKey::Own(i)`
-    /// for the i-th entry (at most 8, when `own` is empty).
-    pub other: Vec<(i32, i32, Vec<u8>)>,
-}
-
-/// One vertex as the GS receives it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct GsVertex {
-    /// Window coordinates: XYZ2 x / 16 - 1792 (the 512-wide frame's
-    /// XYOFFSET), y likewise.
-    pub x: f32,
-    pub y: f32,
-    pub z: u32,
-    /// RGBAQ bytes (alpha 0x80 = 1.0).
-    pub rgba: [u8; 4],
-    pub q: f32,
-    /// UV in texels (FST) or ST (with q).
-    pub uv: [f32; 2],
-}
-
-/// A primitive from a descriptor (0x206F30).
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct GsPrim {
-    /// Descriptor flags (+2): kind bits 0-3, 0x10 IIP, 0x20 TME, 0x100 FGE,
-    /// 0x200 ABE (+ ALPHA), 0x400 AA1, 0x800 FST, 0x1000 context 2, 0x2000
-    /// FIX, 0x4000 CLAMP, 0x8000 Z write.
-    pub flags: u16,
-    /// GS PRIM type: 0 point, 1 line, 2 line strip, 3 triangle, 4 strip,
-    /// 5 fan, 6 sprite.
-    pub kind: u8,
-    pub vertices: Vec<GsVertex>,
-    pub alpha: Option<u64>,
-    pub tex0: Option<u64>,
-    /// TEX1 (filters, LOD K / L), with TEX0.
-    pub tex1: Option<u64>,
-    /// CLAMP when the descriptor writes it (flag 0x4000); else the GS keeps
-    /// the previous draw's, REPEAT in every dump checked [emu 062-066: the
-    /// frame-texture strips 0xA34; card 21's 0x226 composite].
-    pub clamp: Option<u64>,
-    /// The texture TEX0.TBP0 points at, when it is one this shim placed.
-    pub texture: Option<TextureKey>,
-    /// Written into a caller buffer (0x206F90) rather than the frame.
-    pub buffered: bool,
-    /// The descriptor's address (research).
-    pub desc: u32,
-    /// The ordering-table key it was linked at (0x206F30's a1 / a2: the
-    /// OT 0x2E91B8, drawn from the highest key down, later links of a key
-    /// first) [F 0x207970; emu OT links in footage 044 / 064].
-    pub ot_key: Option<i32>,
-    /// The packet layer (0x2078A0 ... 0x207910) it was written into.
-    pub layer: Option<u32>,
-    /// Drawn into this role's offscreen unit target (FRAME 0x2000): sent by
-    /// the module's callback that 0x1EF8F0 calls between the unit's render
-    /// there and its composite [F 0x1F080C..0x1F0818; emu card 484 c20
-    /// draw 16, the "glass" strip].
-    pub target: Option<u8>,
-    /// Sent by the pre-model callback (0x1EF8F0's t3): drawn into the target
-    /// before the unit's model [F 0x1EFE70].
-    pub target_pre: bool,
-    /// Drawn after the update's first frame copy (GS order, set by the
-    /// caller from [`copy_position`]): not part of what the copy holds.
-    pub post_copy: bool,
-    /// TEX0 points at the buffer being drawn this frame (0x209640(1): TBP 0
-    /// on odd frame counters 0x2E963C, else 0x800 [F]): the low-RAM TEX0 0
-    /// on every other frame, reading what the frame holds so far.
-    pub drawn_buffer: bool,
-}
-
-impl GsPrim {
-    pub fn gouraud(&self) -> bool {
-        self.flags & 0x10 != 0
-    }
-    pub fn textured(&self) -> bool {
-        self.flags & 0x20 != 0
-    }
-    pub fn blended(&self) -> bool {
-        self.flags & 0x200 != 0
-    }
-    pub fn uv_texels(&self) -> bool {
-        self.flags & 0x800 != 0
-    }
-    /// TEX0 (TW, TH) as texel sizes.
-    pub fn texture_size(&self) -> Option<(u32, u32)> {
-        let t = self.tex0?;
-        Some((1 << ((t >> 26) & 15), 1 << ((t >> 30) & 15)))
-    }
-}
-
-/// Decode a primitive descriptor at `desc` (0x206F90's input): `+0 u16 n`
-/// register count, `+2 u16 flags`, `+8 u64` 4-bit GS register ids, `+0x10`
-/// n u64 register-format values, then ALPHA (0x200), TEX0 / TEX1 (0x20),
-/// CLAMP (0x20 and 0x4000) [F 0x206F90].
-pub fn decode_descriptor(cpu: &mut Cpu, desc: u32) -> Option<GsPrim> {
-    let n = u32::from(cpu.read_u16(desc));
-    let flags = cpu.read_u16(desc + 2);
-    if flags & 0xF == 7 || n > 64 {
-        return None;
-    }
-    let regs = cpu.read_u64(desc + 8);
-    let values = desc + 0x10;
-    // Fixed slots after the values: ALPHA, TEX0, TEX1, CLAMP.
-    let extra = values + 8 * n;
-    let alpha = (flags & 0x200 != 0).then(|| cpu.read_u64(extra));
-    let (tex0, tex1, clamp) = if flags & 0x20 != 0 {
-        let t = cpu.read_u64(extra + 8);
-        let t1 = cpu.read_u64(extra + 16);
-        let c = (flags & 0x4000 != 0).then(|| cpu.read_u64(extra + 24));
-        (Some(t), Some(t1), c)
-    } else {
-        (None, None, None)
-    };
-    let mut prim = GsPrim {
-        flags,
-        kind: (flags & 7) as u8,
-        vertices: Vec::new(),
-        alpha,
-        tex0,
-        tex1,
-        clamp,
-        texture: tex0.and_then(|t| TextureKey::from_tbp((t & 0x3FFF) as u16)),
-        buffered: false,
-        desc,
-        ot_key: None,
-        layer: None,
-        target: None,
-        target_pre: false,
-        post_copy: false,
-        drawn_buffer: false,
-    };
-    let (mut rgba, mut q, mut uv) = ([0x80u8; 4], 1.0f32, [0.0f32; 2]);
-    for i in 0..n {
-        let mut id = ((regs >> (4 * i)) & 15) as u8;
-        if flags & 0x800 != 0 && id == 2 {
-            id = 3;
-        }
-        let v = cpu.read_u64(values + 8 * i);
-        match id {
-            0 => prim.kind = (v & 7) as u8,
-            1 => {
-                rgba = [v as u8, (v >> 8) as u8, (v >> 16) as u8, (v >> 24) as u8];
-                q = f32::from_bits((v >> 32) as u32);
-            }
-            2 => uv = [f32::from_bits(v as u32), f32::from_bits((v >> 32) as u32)],
-            3 => uv = [(v & 0x3FFF) as f32 / 16.0, ((v >> 16) & 0x3FFF) as f32 / 16.0],
-            4 | 5 => prim.vertices.push(GsVertex {
-                x: (v & 0xFFFF) as f32 / 16.0 - 1792.0,
-                y: ((v >> 16) & 0xFFFF) as f32 / 16.0 - 1792.0,
-                z: if id == 4 { ((v >> 32) & 0xFF_FFFF) as u32 } else { (v >> 32) as u32 },
-                rgba,
-                q,
-                uv,
-            }),
-            _ => {}
-        }
-    }
-    Some(prim)
-}
-
-/// The arena camera as the port draws it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct CameraMirror {
-    pub eye: [f32; 3],
-    pub target: [f32; 3],
-    /// Projection distance (camera +0x44, 256 / tan(fov / 2)).
-    pub distance: f32,
-    pub roll: f32,
-}
-
-impl CameraMirror {
-    /// The view matrix (row vectors v' = v M): right, up (y down) and
-    /// forward columns from eye and target, as the arena's look-at [emu
-    /// 0x2ED760 in footage 044 against its eye +0x100 and dir +0x110].
-    pub fn view(&self) -> [[f32; 4]; 4] {
-        let f = normalize(sub(self.target, self.eye)).unwrap_or([0.0, 0.0, 1.0]);
-        let r = normalize(cross(f, [0.0, 1.0, 0.0])).unwrap_or([1.0, 0.0, 0.0]);
-        let u = cross(f, r);
-        let t = [-dot(r, self.eye), -dot(u, self.eye), -dot(f, self.eye)];
-        [
-            [r[0], u[0], f[0], 0.0],
-            [r[1], u[1], f[1], 0.0],
-            [r[2], u[2], f[2], 0.0],
-            [t[0], t[1], t[2], 1.0],
-        ]
-    }
-    /// The projection record (0x2ED7A0).
-    pub fn projection(&self) -> [[f32; 4]; 4] {
-        let d = self.distance;
-        [[d, 0.0, 0.0, 0.0], [0.0, d * ASPECT_Y, 0.0, 0.0], [2048.0, 2048.0, -2048.25, 1.0], [0.0, 0.0, 16_779_264.0, 0.0]]
-    }
-}
-
-fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
-}
-fn normalize(a: [f32; 3]) -> Option<[f32; 3]> {
-    let l = dot(a, a).sqrt();
-    (l > 1e-12).then(|| [a[0] / l, a[1] / l, a[2] / l])
-}
-fn mat_mul(a: &[[f32; 4]; 4], b: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
-    std::array::from_fn(|i| std::array::from_fn(|j| (0..4).map(|k| a[i][k] * b[k][j]).sum()))
-}
-
-/// One arena unit object as the module sees it.
-#[derive(Clone, Debug, PartialEq)]
-pub struct UnitMirror {
-    /// obj+0x00.
-    pub position: [f32; 3],
-    /// obj+0x10 (s32 angles, 0x10000 = a turn).
-    pub rotation: [i32; 3],
-    /// obj+0x80, the animated position.
-    pub animated: [f32; 3],
-    /// obj+0x1E0 current motion, obj+0x19C its time, obj+0x198 speed.
-    pub motion: u8,
-    pub time: f32,
-    pub speed: f32,
-    /// obj+0x1F7 top bits: 1 forward, -1 backward, 0 stopped.
-    pub play_mode: i8,
-    /// obj+0x20D bit 0 (0x1F84D0 -> 0x1F4500 sets it): the motion step
-    /// 0x1EE6E0 and the cue player 0x1EEC80 skip the unit [F 0x1EE7B4,
-    /// 0x1EED60]; B220 holds Orion at t 10 with it [emu battle-pine 036-043].
-    pub frozen: bool,
-    /// Frame counts by motion (obj+0x1C0 + 4 m).
-    pub frames: [u32; 8],
-    /// obj+0x12F (0x80 opaque).
-    pub alpha: u8,
-    /// obj+0x1FE, the skeleton's node count.
-    pub nodes: u8,
-    /// obj+0x206 (monster model index).
-    pub model: u16,
-    /// Node 0's bounding sphere: centre obj+0x90, radius obj+0x1E4 [emu].
-    pub bounds: [f32; 4],
-}
-
-/// Entries of the ordering table 0x2E91B8 (log2 12 at +0xC) [emu].
-pub const OT_ENTRIES: u32 = 4096;
-
-/// The stage light byte (0x1F7F10 sets it, 0x1F7F40 reads it).
-pub const STAGE_LIGHT: u32 = 0x002D_F5B2;
-
-/// The GS order of an update's primitives (indices into `prims`): the ones
-/// sent straight (no ordering table, outside a layer) first in submission
-/// order [H]; then the ordering table 0x2E91B8 from its highest key down,
-/// the later links of a key first (entry k links to k - 1 and a link is
-/// pushed at the head) [F 0x206F30 / 0x207910]; a packet layer is one link
-/// whose primitives keep their submission order.
-pub fn draw_order(prims: &[GsPrim], layers: &[(u32, Option<i32>, usize)]) -> Vec<usize> {
-    // (key, link sequence, primitives)
-    let mut links: Vec<(i32, usize, Vec<usize>)> = Vec::new();
-    let mut direct = Vec::new();
-    let linked_layer = |id: u32| layers.iter().find(|l| l.0 == id && l.1.is_some());
-    for (i, p) in prims.iter().enumerate() {
-        match (p.layer.and_then(linked_layer), p.ot_key) {
-            (Some(_), _) => {}
-            (None, Some(k)) => links.push((k, 2 * i + 1, vec![i])),
-            (None, None) => direct.push(i),
-        }
-    }
-    for &(id, key, at) in layers {
-        let Some(k) = key else { continue };
-        let members: Vec<usize> = prims.iter().enumerate().filter(|(_, p)| p.layer == Some(id)).map(|(i, _)| i).collect();
-        // Linked after primitive at - 1 (sequence 2 at - 1), before
-        // primitive at (2 at + 1).
-        links.push((k, 2 * at, members));
-    }
-    // Later links of a key first.
-    links.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
-    direct.into_iter().chain(links.into_iter().flat_map(|l| l.2)).collect()
-}
-
-/// A GS local copy of the frame queued by 0x207FC0 into the packet being
-/// written: its destination, the primitives submitted before it and the
-/// packet layer it went into (none: sent straight).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FrameCopy {
-    pub tbp: u16,
-    pub before: usize,
-    pub layer: Option<u32>,
-}
-
-/// Where a frame copy lands in the GS order of [`draw_order`]: the number of
-/// primitives drawn before it. In a linked layer it keeps its submission
-/// place among the layer's primitives; else it is sent straight, among the
-/// straight primitives in submission order [F 0x207FC0 writes at the packet
-/// pointer it is given, as 0x206F90 does].
-pub fn copy_position(prims: &[GsPrim], layers: &[(u32, Option<i32>, usize)], copy: &FrameCopy) -> usize {
-    // The copy as a marker primitive at its submission place.
-    let at = copy.before.min(prims.len());
-    let mut all: Vec<GsPrim> = Vec::with_capacity(prims.len() + 1);
-    all.extend_from_slice(&prims[..at]);
-    all.push(GsPrim { kind: 7, layer: copy.layer, ..Default::default() });
-    all.extend_from_slice(&prims[at..]);
-    // Links made after the copy move by one; its own layer closed after it.
-    let shifted: Vec<(u32, Option<i32>, usize)> =
-        layers.iter().map(|&(id, key, n)| (id, key, if n > at || (n == at && Some(id) == copy.layer) { n + 1 } else { n })).collect();
-    draw_order(&all, &shifted).iter().position(|&i| i == at).unwrap_or(prims.len())
-}
-
-/// What the runner reads from the battle each update.
-pub trait EffectWorld {
-    fn camera(&self) -> CameraMirror;
-    /// Role 0 attacker, 1 defender.
-    fn unit(&self, role: usize) -> UnitMirror;
-    /// World position of skeleton node `node` of unit `role` (obj+0xA0 +
-    /// 16 * slot as the model renderer fills it).
-    fn node(&self, role: usize, node: u8) -> Option<[f32; 3]>;
-    /// The display frame counter 0x2E963C the module sees (one count per
-    /// update, shared by every module of the battle); `None`: the calls made.
-    fn frame_counter(&self) -> Option<u32> {
-        None
-    }
-}
-
-/// One update's output.
-#[derive(Clone, Debug, Default)]
-pub struct EffectUpdate {
-    /// The module's return (8 = end).
-    pub ret: i32,
-    /// Primitives in submission order.
-    pub prims: Vec<GsPrim>,
-    /// Boundary calls this shim does not implement: (address, name, a0..a3).
-    pub boundary: Vec<(u32, &'static str, [u32; 4])>,
-    /// 0x202530 asks for textures not available (type, id).
-    pub missing_textures: Vec<(i32, i32)>,
-    /// obj+0x20D of (attacker, defender) after the update.
-    pub flags_20d: [u8; 2],
-    /// The stage light 0x2DF5B2 after the update (0x80 = 1.0: the stage
-    /// objects' light scale g; modules set it through 0x1F7F10) [F
-    /// ARENA-ENVIRONMENT.md 3; run: modules 373 / 133 dim the stage].
-    pub stage_light: u8,
-    /// Units drawn into the offscreen target by 0x1F0FD0 (0x1EF6F0 /
-    /// 0x1EF8F0), in order, with the number of primitives emitted before.
-    pub unit_renders: Vec<UnitRender>,
-    /// Unit object fields the module wrote, read back after the update.
-    pub unit_writes: [UnitWrites; 2],
-    /// Packet layers closed this update: (id, OT key when linked, number
-    /// of primitives submitted before the link).
-    pub layers: Vec<(u32, Option<i32>, usize)>,
-    /// GS local copies of the frame queued (0x207FC0).
-    pub frame_copies: Vec<FrameCopy>,
-    pub steps: u64,
-}
-
-/// A unit drawn into the offscreen target (TBP 0x2000) for an afterimage.
-#[derive(Clone, Debug, PartialEq)]
-pub struct UnitRender {
-    pub role: u8,
-    /// Primitives emitted before it in this update.
-    pub before: usize,
-    /// 0x1EF8F0's t3 (module t0 of 0x1F82B0): not a matrix but a module
-    /// callback run before the unit's model, into the target (0 = none)
-    /// [F 0x1EF96C / 0x1EFE64..0x1EFE78].
-    pub pre: u32,
-    /// The camera the unit is drawn into the target with when the pre
-    /// callback switched it (0x20D660 / 0x20DAD0 / 0x20E3D0): the current
-    /// camera record's view-projection (0x2ED720 + 0x1A0 * index 0x2ED6C0,
-    /// +0, row vectors) as the callback left it [F 0x20E3D0].
-    pub pre_vp: Option<[[f32; 4]; 4]>,
-    /// 0x1EF8F0's stack argument (module t1), when given.
-    pub extra: u64,
-}
-
-/// Unit object fields modules write that change how the unit looks
-/// [run: the sweep's object writes].
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct UnitWrites {
-    /// obj+0x12C..0x12F: RGBA multiplier (0x80 = 1.0; alpha +0x12F).
-    pub tint: [u8; 4],
-    /// obj+0x130..0x133 (written with the tint by 24 modules) [H: an added colour].
-    pub add: [u8; 4],
-    /// obj+0x30: scale (x, y, z, w).
-    pub scale: [f32; 4],
-    /// obj+0x1F8: bits 0-1 pick the offscreen composite's ALPHA, bits 2-3 the
-    /// full-window colour pass's (0x208450: table 0x2D0FA0 = 0x44, 0x48, 0x42,
-    /// 0x84, FIX 0x80) [F 0x1EFD08 / 0x1F06EC / 0x1F0848].
-    pub mode: u8,
-    /// obj+0x128: the float the colour pass's alpha is scaled by (+0x133 *
-    /// +0x128, 0x1A2C70) [F 0x1F0720..0x1F0760].
-    pub fade: f32,
-}
+pub use roses_fx::world::decode_descriptor;
 
 /// A launched attack effect.
 pub struct AttackEffect {
@@ -641,7 +196,14 @@ pub struct AttackEffect {
     rt: Option<RtContent>,
     /// Destinations of frame copies seen (other than 0x2000).
     copies: Vec<u16>,
+    /// Research: consulted at every control transfer before the runner's
+    /// own hooks (`Some` answers it); the function-level parity harness
+    /// (`crate::fnparity`) watches library calls with it. `None` normally.
+    pub probe: Option<Probe>,
 }
+
+/// A [`AttackEffect::probe`].
+pub type Probe = Box<dyn FnMut(&mut Cpu, u32) -> Option<Hook> + Send>;
 
 /// The content of the offscreen block at [`UNIT_RT_TBP`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -703,7 +265,7 @@ impl AttackEffect {
             return Ok(None);
         };
         cpu.load(LINK_ADDRESS, record);
-        let mut effect = Self { cpu, entry, data_area: DATA_AREA, card, model, calls: 0, finished: false, handles, textures: BTreeMap::new(), hle: true, rt: None, copies: Vec::new() };
+        let mut effect = Self { cpu, entry, data_area: DATA_AREA, card, model, calls: 0, finished: false, handles, textures: BTreeMap::new(), hle: true, rt: None, copies: Vec::new(), probe: None };
         effect.place_textures(textures);
         effect.static_state();
         Ok(Some(effect))
@@ -730,124 +292,20 @@ impl AttackEffect {
             return Ok(None);
         }
         cpu.load(LINK_ADDRESS, record);
-        let mut effect = Self { cpu, entry, data_area: CMODULE_DATA_AREA, card: id, model: id, calls: 0, finished: false, handles, textures: BTreeMap::new(), hle: true, rt: None, copies: Vec::new() };
+        let mut effect = Self { cpu, entry, data_area: CMODULE_DATA_AREA, card: id, model: id, calls: 0, finished: false, handles, textures: BTreeMap::new(), hle: true, rt: None, copies: Vec::new(), probe: None };
         effect.place_textures(textures);
         effect.static_state();
         effect.cpu.write_u32(LINKED_TYPE, 0);
         Ok(Some(effect))
     }
 
-    /// Copy the RH2 records into the texture area with this shim's TBP0 /
-    /// CBP in TEX0 (+0x30) and the record's own address at +0x0C.
     fn place_textures(&mut self, textures: &EffectTextures) {
-        let mut at = TEXTURE_AREA;
-        let all = textures
-            .texeff
-            .iter()
-            .enumerate()
-            .map(|(i, t)| (4, i as i32, TextureKey::TexEff(i as u8), t.as_ref()))
-            .chain(textures.own.iter().enumerate().map(|(i, t)| (5, i as i32, TextureKey::Own(i as u8), t.as_ref())))
-            .chain(textures.other.iter().take(8).enumerate().map(|(i, (kind, id, t))| (*kind, *id, TextureKey::Own(i as u8), Some(t))));
-        for (kind, id, key, bytes) in all {
-            let Some(bytes) = bytes else { continue };
-            if bytes.len() < 0x60 || bytes.get(..4) != Some(b"RH2\0") || at + bytes.len() as u32 > TEXTURE_AREA_END {
-                continue;
-            }
-            self.cpu.load(at, bytes);
-            self.cpu.write_u32(at + 0x0C, at);
-            let tex0 = self.cpu.read_u64(at + 0x30);
-            let tbp = u64::from(key.tbp());
-            let tex0 = (tex0 & !0x3FFF & !(0x3FFF << 37)) | tbp | ((tbp + 0x20) << 37);
-            self.cpu.write_u64(at + 0x30, tex0);
-            self.textures.insert((kind, id), at);
-            at = (at + bytes.len() as u32 + 0x3F) & !0x3F;
-        }
+        self.textures = roses_fx::world::place_textures(&mut self.cpu, textures);
     }
 
     /// State that does not change during the effect.
     fn static_state(&mut self) {
-        let c = &mut self.cpu;
-        c.write_u32(LINKED_TYPE, 1);
-        c.write_u32(LINKED_TYPE + 4, u32::from(self.model));
-        c.write_u32(CAMERA_POINTER, CAMERA_OBJECT);
-        c.write_u32(CAMERA_STACK_INDEX, 0);
-        // The duel's fade bytes and the stage light (0x80 each).
-        for k in 0..3 {
-            c.write_u8(STAGE_LIGHT - 2 + k, 0x80);
-        }
-        for role in 0..2 {
-            let o = OBJECT_RECORD[role];
-            for k in (0..OBJECT_BYTES).step_by(4) {
-                c.write_u32(o + k, 0);
-            }
-            c.write_u32(OBJECT_TABLE + 4 * u32::from(OBJECT_INDEX[role]), o);
-            for k in 0..4 {
-                c.write_f32(o + 0x30 + 4 * k, 1.0);
-            }
-            // Light scales and the RGBA multiplier (0x80 each) [emu].
-            c.write_f32(o + 0x120, 0.8);
-            c.write_f32(o + 0x124, 0.64);
-            c.write_f32(o + 0x128, 1.0);
-            c.write_u32(o + 0x12C, 0x8080_8080);
-            for s in 0..8 {
-                c.write_u16(o + 0x1B0 + 2 * s, 0x7FFF);
-            }
-            c.write_u8(o + 0x1F2, OBJECT_INDEX[role]);
-            c.write_f32(o + 0x1E8, 1.0);
-            c.write_u8(o + 0x20C, 0xE2);
-        }
-        // The GS draw environment the frame-buffer helpers read (0x209640 /
-        // 0x2094B0, called by 0x207FC0 / 0x207EF0 / 0x2095A0 in 307 modules):
-        // FRAME_1 of both display contexts, the frame's width / height /
-        // PSM and 0x2E9638 [emu: footage RAM 044 / 064, equal in both].
-        for (a, v) in [
-            (0x002E_9430u32, 0x0A08_0040u32),
-            (0x002E_9438, 0x4C),
-            (0x002E_9520, 0x0A08_0000),
-            (0x002E_9528, 0x4C),
-            (0x002E_960C, 512),
-            (0x002E_9610, 512),
-            (0x002E_9620, 0x0A),
-            (0x002E_9628, 0x31),
-            (0x002E_962C, 1),
-            (0x002E_9638, 0x2000),
-            // The GS offsets 0x209580 hands 0x20E160 [emu footage 028].
-            (0x002E_9630, 0x800),
-            (0x002E_9634, 0x800),
-            // The pixel aspect 0x209490 returns (1.4285710) and its mode.
-            (0x002E_9614, 0x3FB6_DB6A),
-            (0x002E_9618, 2),
-        ] {
-            c.write_u32(a, v);
-        }
-        // Camera record 0's constants that 0x20E160 builds a projection from
-        // when a module sets a camera of its own (0x20DAD0, e.g. card 677's
-        // pre-model callback): window centre +0x150 / +0x154, aspect +0x158 /
-        // +0x15C, window +0x164 / +0x168, +0x16C, the clip ranges +0x170..0x180,
-        // the Z max +0x184 [emu footage 028; +0x160 the distance is mirrored].
-        let r = CAMERA_RECORD;
-        for (k, v) in [
-            (0x150u32, 0x4380_0000u32),
-            (0x154, 0x4380_0000),
-            (0x158, 0x3F80_0000),
-            (0x15C, 0x3F70_A3D7),
-            (0x164, 0x4400_0000),
-            (0x168, 0x4400_0000),
-            (0x16C, 0x3F80_0000),
-            (0x170, 0x4580_0000),
-            (0x174, 0x44FA_0000),
-            (0x178, 0x457A_0000),
-            (0x17C, 0x44FA_0000),
-            (0x180, 0x457A_0000),
-            (0x184, 0x00FF_FFFF),
-        ] {
-            c.write_u32(r + k, v);
-        }
-        // Camera object constants [emu footage 044 +0x48..+0x6C].
-        let cam = CAMERA_OBJECT;
-        for (k, v) in [(0x48, 1.0f32), (0x4C, 0.94), (0x50, 1.0), (0x54, 4096.0), (0x64, 0.5), (0x68, 0.5), (0x6C, 0.5)] {
-            c.write_f32(cam + k, v);
-        }
+        roses_fx::world::static_state(&mut self.cpu, self.model);
     }
 
     /// Make `role`'s mirrored object record answer at object index `index`
@@ -859,15 +317,7 @@ impl AttackEffect {
     /// (+0x178 + 4 m), which ChangeMotion 0x1F2770 requires; the motion a
     /// module sets is read back with [`Self::object_motion`].
     pub fn place_role(&mut self, role: usize, index: u8, motions: &[(u8, u32)]) {
-        let o = OBJECT_RECORD[role];
-        let c = &mut self.cpu;
-        c.write_u32(OBJECT_TABLE + 4 * u32::from(index), o);
-        c.write_u8(o + 0x1F2, index);
-        c.write_u8(o + 0x1F9, 8);
-        for &(m, frames) in motions.iter().filter(|m| m.0 < 8) {
-            c.write_u32(o + 0x178 + 4 * u32::from(m), 1);
-            c.write_u32(o + 0x1C0 + 4 * u32::from(m), frames);
-        }
+        roses_fx::world::place_role(&mut self.cpu, role, index, motions);
     }
 
     /// `role`'s motion after the last call: (motion obj+0x1E0, time
@@ -879,102 +329,7 @@ impl AttackEffect {
 
     /// Write the battle's state into the image before a call.
     pub fn mirror(&mut self, world: &dyn EffectWorld) {
-        let c = &mut self.cpu;
-        // Camera object and record 0.
-        let cam = world.camera();
-        let d = sub(cam.eye, cam.target);
-        let dist = dot(d, d).sqrt();
-        let (yaw, pitch) = if dist > 0.0 {
-            (d[2].atan2(d[0]).rem_euclid(std::f32::consts::TAU), (d[1] / dist).clamp(-1.0, 1.0).asin())
-        } else {
-            (0.0, 0.0)
-        };
-        let dir = normalize(sub(cam.target, cam.eye)).unwrap_or([0.0, 0.0, 1.0]);
-        let o = CAMERA_OBJECT;
-        for (k, v) in [dist, yaw, pitch].into_iter().enumerate() {
-            c.write_f32(o + 4 * k as u32, v);
-        }
-        for k in 0..3 {
-            c.write_f32(o + 0x10 + 4 * k as u32, dir[k]);
-            c.write_f32(o + 0x20 + 4 * k as u32, cam.eye[k]);
-            c.write_f32(o + 0x30 + 4 * k as u32, cam.target[k]);
-        }
-        c.write_f32(o + 0x3C, 1.0);
-        c.write_f32(o + 0x40, cam.roll);
-        c.write_f32(o + 0x44, cam.distance);
-        let view = cam.view();
-        let proj = cam.projection();
-        let vp = mat_mul(&view, &proj);
-        let r = CAMERA_RECORD;
-        for (base, m) in [(0u32, &vp), (0x40, &view), (0x80, &proj), (0xC0, &vp)] {
-            for i in 0..4 {
-                for j in 0..4 {
-                    c.write_f32(r + base + 16 * i as u32 + 4 * j as u32, m[i][j]);
-                }
-            }
-        }
-        for k in 0..3 {
-            c.write_f32(r + 0x100 + 4 * k as u32, cam.eye[k]);
-            c.write_f32(r + 0x110 + 4 * k as u32, dir[k]);
-        }
-        c.write_f32(r + 0x160, cam.distance);
-        // Units.
-        for role in 0..2 {
-            let u = world.unit(role);
-            let o = OBJECT_RECORD[role];
-            for k in 0..3 {
-                c.write_f32(o + 4 * k as u32, u.position[k]);
-                c.write_u32(o + 0x10 + 4 * k as u32, u.rotation[k] as u32);
-                c.write_f32(o + 0x80 + 4 * k as u32, u.animated[k]);
-            }
-            c.write_f32(o + 0x0C, 1.0);
-            c.write_f32(o + 0x8C, 1.0);
-            for k in 0..3 {
-                c.write_f32(o + 0x90 + 4 * k as u32, u.bounds[k]);
-            }
-            c.write_f32(o + 0x9C, 1.0);
-            c.write_f32(o + 0x1E4, u.bounds[3]);
-            // The battle writes the alpha only while a unit fades; the
-            // modules' own tint writes (+0x12C..) persist otherwise.
-            if u.alpha != 0x80 {
-                c.write_u8(o + 0x12F, u.alpha);
-            }
-            c.write_f32(o + 0x198, u.speed);
-            c.write_f32(o + 0x19C, u.time);
-            for m in 0..8 {
-                c.write_u32(o + 0x1C0 + 4 * m as u32, u.frames[m]);
-            }
-            c.write_u8(o + 0x1E0, u.motion);
-            c.write_u8(o + 0x1E1, 0xFF);
-            let mode = c.read_u8(o + 0x1F7) & 0x3F | (((u.play_mode as u8) & 3) << 6);
-            c.write_u8(o + 0x1F7, mode);
-            let flags = c.read_u8(o + 0x20D) & !1 | u8::from(u.frozen);
-            c.write_u8(o + 0x20D, flags);
-            c.write_u16(o + 0x1F4, u.model);
-            c.write_u16(o + 0x206, u.model);
-            c.write_u8(o + 0x1FE, u.nodes);
-            // Node results for the registered requests.
-            let count = c.read_u8(o + 0x1F9).min(8);
-            for s in 0..u32::from(count) {
-                let key = c.read_u16(o + 0x1B0 + 2 * s);
-                if key & 0x7FFF == 0x7FFF {
-                    continue;
-                }
-                match world.node(role, key as u8) {
-                    Some(p) => {
-                        for k in 0..3 {
-                            c.write_f32(o + 0xA0 + 16 * s + 4 * k as u32, p[k]);
-                        }
-                        c.write_f32(o + 0xAC + 16 * s, 1.0);
-                        c.write_u16(o + 0x1B0 + 2 * s, key | 0x8000);
-                    }
-                    None => c.write_u16(o + 0x1B0 + 2 * s, key & 0x7FFF),
-                }
-            }
-        }
-        c.write_u32(PACKET_POINTER, PACKET_SCRATCH);
-        // The display frame counter (its parity picks the draw buffer).
-        c.write_u32(0x002E_963C, world.frame_counter().unwrap_or(self.calls as u32));
+        roses_fx::world::mirror(&mut self.cpu, world, self.calls);
     }
 
     /// The launch (`entry(data, param)`) or the next update
@@ -1002,7 +357,11 @@ impl AttackEffect {
         let drawn_tbp: u16 = if self.cpu.read_u32(0x002E_963C) & 1 == 1 { 0 } else { 0x800 };
         // Research: every hooked call with the primitives emitted so far.
         let trace_calls = std::env::var_os("ROSES_BMODULE_TRACE_CALLS").is_some_and(|v| v.to_str().and_then(|v| v.parse::<usize>().ok()) == Some(self.calls));
+        let mut probe = self.probe.take();
         let mut hooks = |c: &mut Cpu, pc: u32| -> Hook {
+            if let Some(h) = probe.as_mut().and_then(|p| p(c, pc)) {
+                return h;
+            }
             if !is_hooked(pc) {
                 return Hook::Run;
             }
@@ -1197,10 +556,16 @@ impl AttackEffect {
             Hook::Run
         };
         // The executor sets both handles before every call [F 0x1F52E0].
-        self.cpu.call(SET_TARGET, &[u64::from(handles[1])], STACK, 10_000, &mut hooks)?;
-        self.cpu.call(SET_SELF, &[u64::from(handles[0])], STACK, 10_000, &mut hooks)?;
         let arg: i64 = if self.calls == 0 { 0 } else { -1 };
-        let r = self.cpu.call(self.entry, &[u64::from(self.data_area), arg as u64], STACK, STEPS_PER_CALL, &mut hooks)? as u32 as i32;
+        let (entry, data_area) = (self.entry, self.data_area);
+        let r = (|| {
+            self.cpu.call(SET_TARGET, &[u64::from(handles[1])], STACK, 10_000, &mut hooks)?;
+            self.cpu.call(SET_SELF, &[u64::from(handles[0])], STACK, 10_000, &mut hooks)?;
+            self.cpu.call(entry, &[u64::from(data_area), arg as u64], STACK, STEPS_PER_CALL, &mut hooks)
+        })();
+        drop(hooks);
+        self.probe = probe;
+        let r = r? as u32 as i32;
         out.ret = r;
         out.steps = self.cpu.steps;
         self.calls += 1;

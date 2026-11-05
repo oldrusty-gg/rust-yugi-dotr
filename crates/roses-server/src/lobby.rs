@@ -190,6 +190,11 @@ impl Lobby {
     pub fn enter(&mut self, name: &str, conn: ConnId, in_match: bool) -> Vec<Action> {
         let mut out = Vec::new();
         let key = username_key(name);
+        // Signed in from a second place: the first place's challenges and
+        // rooms go with its sign-out (the hub signed that connection out).
+        if self.players.contains_key(&key) {
+            out = self.leave(name);
+        }
         self.away_in_match.remove(&key);
         self.players.insert(key, Present { name: name.into(), conn, room: None, in_match, mode_room: None });
         // The newcomer sees the list at once; the others with the next one.

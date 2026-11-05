@@ -1091,3 +1091,151 @@ fn a_third_player_watches_a_duel_from_the_lobby_and_a_fourth_leaves_with_start()
     server.join().unwrap();
     let _ = std::fs::remove_dir_all(&root);
 }
+
+// ---- messages, the saved session, the lobby's cursor, names (5 Nov review) ----
+
+/// A menu on a lobby the test plays the server of.
+fn menu_on_fake_lobby(tag: &str) -> (OnlineMenu, roses_net::transport::Memory<LobbyEvent, LobbyRequest>) {
+    let root = std::env::temp_dir().join(format!("roses-menu-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let config = OnlineConfig { server: "127.0.0.1:1".into(), name: None, tls: false, pin: None };
+    let path = root.join("online.json");
+    std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let mut m = OnlineMenu::new(&path, Err("no save".into()), compat());
+    let (client, server) = roses_net::transport::memory_pair::<LobbyRequest, LobbyEvent>();
+    m.lobby = Some(LobbyClient::start(Box::new(client), compat(), "test").unwrap());
+    (m, server)
+}
+
+#[test]
+fn a_version_refusal_says_so_when_the_server_closes_right_after_it() {
+    use roses_net::lobby::LobbyRefusal;
+    use roses_net::transport::Connection;
+    let (mut m, mut server) = menu_on_fake_lobby("refused");
+    m.screen = Screen::Account;
+    server.send(&LobbyEvent::LobbyRefused { reason: LobbyRefusal::LobbyVersion { client: 1, server: 2 } }).unwrap();
+    server.close();
+    m.update();
+    assert_eq!(m.screen, Screen::Server);
+    assert!(m.note.as_deref().is_some_and(|n| n.contains("update the game")), "{:?}", m.note);
+}
+
+#[test]
+fn only_a_session_the_server_refuses_is_forgotten() {
+    use roses_net::transport::Connection;
+    let (mut m, mut server) = menu_on_fake_lobby("session");
+    for problem in [AuthProblem::Busy, AuthProblem::TooManyAttempts, AuthProblem::EmailNotVerified] {
+        m.save_session("Yugi", "token");
+        m.resuming = true;
+        m.screen = Screen::Signing;
+        server.send(&LobbyEvent::AuthFailed { problem }).unwrap();
+        m.update();
+        assert!(m.saved_session().is_some(), "{problem:?} says nothing about the session");
+        assert_eq!(m.screen, Screen::Account);
+        assert_eq!(m.note, Some(auth_note(problem)));
+    }
+    m.resuming = true;
+    server.send(&LobbyEvent::AuthFailed { problem: AuthProblem::SessionExpired }).unwrap();
+    m.update();
+    assert!(m.saved_session().is_none());
+    assert_eq!(m.note.as_deref(), Some("please log in"));
+    // A resumed sign-in is over once signed in: a later refusal is shown as it is.
+    m.save_session("Yugi", "token");
+    m.resuming = true;
+    server.send(&LobbyEvent::SignedIn { username: "Yugi".into(), session: "token".into() }).unwrap();
+    m.update();
+    assert!(!m.resuming);
+}
+
+#[test]
+fn every_sign_in_problem_fits_the_note_line_whole() {
+    for p in [
+        AuthProblem::BadUsername,
+        AuthProblem::WeakPassword,
+        AuthProblem::UsernameTaken,
+        AuthProblem::BadInvite,
+        AuthProblem::BadCredentials,
+        AuthProblem::SessionExpired,
+        AuthProblem::Disabled,
+        AuthProblem::TooManyAttempts,
+        AuthProblem::Busy,
+        AuthProblem::NotSignedIn,
+        AuthProblem::ReservedName,
+        AuthProblem::SignUpLimit,
+        AuthProblem::EmailNotVerified,
+    ] {
+        let note = auth_note(p);
+        assert!(note.chars().count() < LINE_MAX || note == p.to_string(), "{p:?}: {note}");
+        assert!(p.to_string().chars().count() <= LINE_MAX || note != cut(&p.to_string()), "{p:?} would be cut: {note}");
+    }
+}
+
+#[test]
+fn the_lobby_cursor_stays_on_its_button_as_players_come_and_go() {
+    use roses_net::lobby::PlayerEntry;
+    use roses_net::transport::Connection;
+    let (mut m, mut server) = menu_on_fake_lobby("cursor");
+    m.lobby.as_mut().unwrap().user = Some("Yugi".into());
+    m.screen = Screen::Lobby;
+    let list = |names: &[&str]| LobbyEvent::Players {
+        players: names.iter().map(|n| PlayerEntry { name: (*n).into(), state: PlayerState::Idle }).collect(),
+    };
+    server.send(&list(&["Yugi", "Kaiba", "Joey"])).unwrap();
+    m.update();
+    select(&mut m, button("LOG OUT"));
+    server.send(&list(&["Yugi", "Joey"])).unwrap();
+    m.update();
+    assert_eq!(m.view().rows[m.cursor], Row::Button("LOG OUT".into()), "one left");
+    server.send(&list(&["Yugi", "Joey", "Mai", "Tea"])).unwrap();
+    m.update();
+    assert_eq!(m.view().rows[m.cursor], Row::Button("LOG OUT".into()), "two came");
+    // The last row stays a row.
+    select(&mut m, button("BACK TO TITLE"));
+    server.send(&list(&["Yugi"])).unwrap();
+    m.update();
+    assert_eq!(m.view().rows[m.cursor], Row::Button("BACK TO TITLE".into()));
+    // On a player's row the cursor stays on the rows there are.
+    server.send(&list(&["Yugi", "Joey", "Mai"])).unwrap();
+    m.update();
+    select(&mut m, |r| matches!(r, Row::Player(n, _) if n == "Mai"));
+    server.send(&list(&["Yugi", "Joey"])).unwrap();
+    m.update();
+    assert!(m.cursor < m.view().rows.len());
+}
+
+#[test]
+fn four_long_names_are_readable_on_the_n_player_screens() {
+    let seats: Vec<String> = ["Christopher1", "Alexandra123", "Maximilian99", "Pegasus Crawford"].map(String::from).to_vec();
+    let lines = name_lines(&seats);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines.iter().all(|l| l.chars().count() <= LINE_MAX), "{lines:?}");
+    assert!(seats.iter().all(|s| lines.iter().any(|l| l.contains(s.as_str()))), "no name is cut: {lines:?}");
+    let live = LiveMatch {
+        match_id: "m".into(),
+        players: [seats[0].clone(), seats[1].clone()],
+        map: None,
+        round: 3,
+        watching: 0,
+        seats: seats.clone(),
+        mode: None,
+    };
+    // A WATCH row holds about 14 letters: the four names were squeezed in.
+    assert_eq!(OnlineMenu::live_row_title(&live), "Christopher1 &3");
+    // Every letter of it is in the font: an unknown one reads as '?'.
+    assert!(OnlineMenu::live_row_title(&live).chars().all(|c| c == ' ' || crate::online_title::font_cell(c).is_some()));
+    let two = LiveMatch { seats: Vec::new(), ..live.clone() };
+    assert_eq!(OnlineMenu::live_row_title(&two), "Christopher1 vs Alexandra123");
+    // Joining as a spectator names every seat, not the first two.
+    let (mut m, _server) = menu_on_fake_lobby("names");
+    m.watching = Some(WatchReady { match_id: "m".into(), ticket: "t".into(), players: live.players.clone(), map: None, options: Default::default() });
+    m.watch_seats = Some(seats.clone());
+    m.screen = Screen::WatchStarting;
+    assert!(m.view().info.iter().any(|l| l.contains("Pegasus Crawford")), "{:?}", m.view().info);
+}
+
+#[test]
+fn an_unreachable_server_reads_as_a_whole_line() {
+    let note = unreachable_note("No connection could be made because the target machine actively refused it. (os error 10061)");
+    assert!(note.chars().count() <= LINE_MAX, "{note}");
+    assert_eq!(cut(&note), note);
+}

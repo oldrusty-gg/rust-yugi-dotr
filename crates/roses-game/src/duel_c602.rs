@@ -1,5 +1,5 @@
 //! CMODULE c602 (0x25A), the trap / effect burst on the activated card, as
-//! traced in `claude-activate/C602-BURST.md` [F code; emu: an independent
+//! traced in the project notes [F code; emu: an independent
 //! model matched every vertex of the interpreter's 30 updates to 0.15 px
 //! with the port's board camera]:
 //! - RAYS: 64 fixed vertical blades every 5.625 deg round the cell centre

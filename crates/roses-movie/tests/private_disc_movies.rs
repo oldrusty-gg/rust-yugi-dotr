@@ -6,7 +6,7 @@
 //! SSbd size); the digests are of this decoder's output, which was verified
 //! bit-exact (all frames, all planes) against an independent MPEG-2 decoder
 //! using the same integer IDCT, and within +-3 (>= 62 dB per frame) with the
-//! reference IDCT used here. See work/research/movie/claude-pss/NOTES.md.
+//! reference IDCT used here. See work/research/movie/the project notes
 use roses_movie::MovieReader;
 use std::path::PathBuf;
 

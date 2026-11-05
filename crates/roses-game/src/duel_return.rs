@@ -5,7 +5,7 @@
 //! Traced [F c604 0x1E03FD4.., 0x1E02BF0 rays, 0x1E03200 beam, 0x1E00460
 //! glow, 0x1E01300 rings, 0x1E024B0 sparks; emu footage RAM 087-090 and
 //! the GS dump dumps-battle-damage; notes
-//! `claude-units/C604-RETURN-EFFECTS.md`]:
+//! the project notes]:
 //! - Pass 1 is centred on the right card (view x +128), pass 2 on the left
 //!   (-128). Each pass scales a node from 0.1 to 1.0 in 5 updates (+0.2),
 //!   then grows it by 0.005 per update; from k = 5 every layer fades by its

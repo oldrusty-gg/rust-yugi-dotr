@@ -1,7 +1,7 @@
 //! Port addition, not in the 2003 game (docs/ADDITIONS.md): the 4-player
 //! modes, a free-for-all of three or four players and 2v2, played on the
 //! original 7 × 7 board. Every rule here is invented
-//! (`work/research/modes/multiplayer/MULTIPLAYER-DESIGN.md` §2):
+//! (the project notes §2):
 //!
 //! - leaders at the middle of each edge (S (3,6) side 0, N (3,0) side 1,
 //!   E (6,3) side 2, W (0,3) side 3), summon areas unchanged;

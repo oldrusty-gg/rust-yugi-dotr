@@ -60,16 +60,18 @@ use roses_core::duel::Catalogue;
 use roses_net::lobby::{
     ComputerDeck, LiveMatch, MapChoice,
     check_new_username, check_password, check_username, username_key, AuthProblem, ClientFrame, LobbyEvent, LobbyProblem, LobbyRefusal,
-    LobbyRequest, MatchResult, ServerFrame, LOBBY_VERSION,
+    LobbyRequest, MatchResult, ServerFrame, LOBBY_VERSION, PASSWORD_MAX,
 };
 use roses_net::transport::{Connection, LoopbackListener, Received};
 use roses_net::{
     data_fingerprint, ClientMessage, Compat, DeckSubmission, Join, MatchOptions, OnlinePolicy, Refusal, RulesTables,
     ServerMessage,
 };
+use std::any::Any;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io;
 use std::net::IpAddr;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -154,6 +156,27 @@ pub fn players_interval_ms(online: usize) -> u64 {
 
 /// The computer opponent's name in the lobby and the match log.
 pub const COMPUTER_NAME: &str = "COMPUTER";
+/// Hub passes in a row that may panic before the server gives up (see `run`).
+const MAX_FAILED_PASSES: u32 = 1000;
+
+/// What a caught panic said, for the log.
+fn panic_text(panic: &(dyn Any + Send)) -> &str {
+    panic
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("no message")
+}
+
+/// Tests: names whose match or lobby connection panics inside the hub.
+#[cfg(test)]
+pub(crate) static TEST_PANICS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+#[cfg(test)]
+fn test_panic(name: &str) {
+    let listed = TEST_PANICS.lock().unwrap().iter().any(|n| n == name);
+    assert!(!listed, "a test panic for {name}");
+}
 /// Defaults of [`HubSettings::max_spectators_per_match`] and
 /// [`HubSettings::max_spectators`].
 pub const SPECTATORS_PER_MATCH: usize = 8;
@@ -526,6 +549,8 @@ pub struct Hub {
     internal_tx: mpsc::Sender<HubConn>,
     internal_rx: mpsc::Receiver<HubConn>,
     log: Box<dyn FnMut(&str) + Send>,
+    /// Panics caught so far (they end a match or a connection, not the hub).
+    contained: u64,
     last_prune: u64,
     /// Who is online changed since the last list went out.
     players_dirty: bool,
@@ -592,6 +617,7 @@ impl Hub {
             internal_tx,
             internal_rx,
             log: Box::new(log),
+            contained: 0,
             last_prune: 0,
             players_dirty: false,
             players_sent_at: None,
@@ -620,10 +646,29 @@ impl Hub {
     /// Serve until `stop` is set.
     pub fn run(&mut self, acceptors: &mut [Box<dyn HubAcceptor + Send>], stop: &AtomicBool) -> io::Result<()> {
         let start = Instant::now();
+        let mut failed_passes = 0;
         while !stop.load(Ordering::Relaxed) {
             let now = start.elapsed().as_millis() as u64;
-            if !self.step(acceptors, now)? {
-                std::thread::sleep(Duration::from_millis(1));
+            // The last net: `step` contains a connection's or a match's
+            // panic itself; one anywhere else costs this pass, not the
+            // server. A hub that panics on every pass stops, so the service
+            // restarts it instead of it spinning.
+            match catch_unwind(AssertUnwindSafe(|| self.step(acceptors, now))) {
+                Ok(busy) => {
+                    failed_passes = 0;
+                    if !busy? {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                }
+                Err(panic) => {
+                    self.contained += 1;
+                    self.log(&format!("a hub pass panicked: {}", panic_text(&*panic)));
+                    failed_passes += 1;
+                    if failed_passes >= MAX_FAILED_PASSES {
+                        return Err(io::Error::other("the hub panicked on every pass"));
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
             }
         }
         for (_, mut c) in std::mem::take(&mut self.conns) {
@@ -674,34 +719,13 @@ impl Hub {
         busy |= self.email_step(now);
         let ids: Vec<ConnId> = self.conns.keys().copied().collect();
         for id in ids {
-            // A few messages per connection per pass keeps it fair.
-            for _ in 0..32 {
-                let Some(c) = self.conns.get_mut(&id) else { break };
-                match c.conn.poll() {
-                    Received::Empty => break,
-                    Received::Message(m) => {
-                        busy = true;
-                        if !matches!(c.role, Role::Pending) && !c.budget.take(now) {
-                            let _ = c.conn.send(&ServerFrame::Match(ServerMessage::ProtocolError {
-                                message: "message rate limit exceeded".into(),
-                            }));
-                            self.log(&format!("connection {id} exceeded the message rate; closing it"));
-                            self.drop_conn(id, now);
-                            break;
-                        }
-                        self.receive(id, m, now);
-                    }
-                    Received::Malformed(message) => {
-                        busy = true;
-                        let _ = c.conn.send(&ServerFrame::Match(ServerMessage::ProtocolError { message }));
-                        self.drop_conn(id, now);
-                        break;
-                    }
-                    Received::Closed => {
-                        busy = true;
-                        self.drop_conn(id, now);
-                        break;
-                    }
+            let seated = self.seat_match(id);
+            match catch_unwind(AssertUnwindSafe(|| self.read_conn(id, now))) {
+                Ok(read) => busy |= read,
+                Err(panic) => {
+                    busy = true;
+                    let mid = self.seat_match(id).or(seated);
+                    self.contain_conn(id, mid, &*panic, now);
                 }
             }
         }
@@ -740,6 +764,87 @@ impl Hub {
             }
         }
         Ok(busy)
+    }
+
+    /// The messages waiting on one connection, up to this pass's share.
+    fn read_conn(&mut self, id: ConnId, now: u64) -> bool {
+        let mut busy = false;
+        // A few messages per connection per pass keeps it fair.
+        for _ in 0..32 {
+            let Some(c) = self.conns.get_mut(&id) else { break };
+            match c.conn.poll() {
+                Received::Empty => break,
+                Received::Message(m) => {
+                    busy = true;
+                    if !matches!(c.role, Role::Pending) && !c.budget.take(now) {
+                        let _ = c.conn.send(&ServerFrame::Match(ServerMessage::ProtocolError {
+                            message: "message rate limit exceeded".into(),
+                        }));
+                        self.log(&format!("connection {id} exceeded the message rate; closing it"));
+                        self.drop_conn(id, now);
+                        break;
+                    }
+                    self.receive(id, m, now);
+                }
+                Received::Malformed(message) => {
+                    busy = true;
+                    let _ = c.conn.send(&ServerFrame::Match(ServerMessage::ProtocolError { message }));
+                    self.drop_conn(id, now);
+                    break;
+                }
+                Received::Closed => {
+                    busy = true;
+                    self.drop_conn(id, now);
+                    break;
+                }
+            }
+        }
+        busy
+    }
+
+    /// The match whose seat connection `id` holds.
+    fn seat_match(&self, id: ConnId) -> Option<String> {
+        match &self.conns.get(&id)?.role {
+            Role::Seat { match_id, .. } | Role::MultiSeat { match_id, .. } => Some(match_id.clone()),
+            _ => None,
+        }
+    }
+
+    /// A panic while reading connection `id`: a seat's match ends with it
+    /// (its state can no longer be trusted), anything else loses only the
+    /// connection.
+    fn contain_conn(&mut self, id: ConnId, mid: Option<String>, panic: &(dyn Any + Send), now: u64) {
+        self.contained += 1;
+        self.log(&format!("connection {id} panicked: {}", panic_text(panic)));
+        if let Some(mid) = mid {
+            self.end_broken_match(&mid, now);
+        }
+        // `drop_conn` takes the connection out of the table first, so a
+        // second panic in there cannot bring it back.
+        let _ = catch_unwind(AssertUnwindSafe(|| self.drop_conn(id, now)));
+    }
+
+    /// End a match after a panic: cancelled for its players, who go back to
+    /// the lobby; the broken game is asked nothing but who was in it.
+    fn end_broken_match(&mut self, mid: &str, now: u64) {
+        self.log(&format!("{mid}: cancelled after a panic"));
+        if let Some(ended) = self.matches.get(mid).map(|h| h.ended_at.is_some()) {
+            if !ended {
+                let _ = catch_unwind(AssertUnwindSafe(|| self.finish(mid, None, now)));
+            }
+            self.remove_match(mid, now);
+        } else if let Some(ended) = self.multis.get(mid).map(|h| h.ended_at.is_some()) {
+            if !ended {
+                let _ = catch_unwind(AssertUnwindSafe(|| self.finish_multi(mid, None, now)));
+            }
+            self.remove_multi(mid);
+        }
+    }
+
+    /// Panics contained so far (a test that must see none).
+    #[cfg(test)]
+    pub(crate) fn contained(&self) -> u64 {
+        self.contained
     }
 
     fn admit(&mut self, mut conn: HubConn, peer: Option<IpAddr>, internal: bool, now: u64) {
@@ -849,6 +954,10 @@ impl Hub {
 
     fn receive(&mut self, id: ConnId, frame: ClientFrame, now: u64) {
         let Some(c) = self.conns.get(&id) else { return };
+        #[cfg(test)]
+        if let Role::Lobby { user: Some(u), .. } = &c.role {
+            test_panic(&u.name);
+        }
         match (&c.role, frame) {
             (Role::Pending, ClientFrame::Match(ClientMessage::Hello { compat, join: Join::Watch { ticket }, .. }))
                 if self.watch_tickets.get(&ticket).is_some_and(|mid| self.multis.contains_key(mid)) =>
@@ -1056,7 +1165,8 @@ impl Hub {
         if !self.watchable(h) {
             return refuse(self, Refusal::NotWatchable);
         }
-        if h.spectators.len() >= self.settings.max_spectators_per_match || self.spectator_count() >= self.settings.max_spectators {
+        let total = self.spectator_count() + self.multi_spectator_count();
+        if h.spectators.len() >= self.settings.max_spectators_per_match || total >= self.settings.max_spectators {
             return refuse(self, Refusal::WatchersFull);
         }
         let Some(snapshot) = h.game.spectator_snapshot() else { return refuse(self, Refusal::NotWatchable) };
@@ -1187,7 +1297,7 @@ impl Hub {
                     Some(h) if !self.watchable(h) || h.players.iter().any(|p| username_key(p) == me) => Some(LobbyProblem::NotWatchable),
                     Some(h)
                         if h.spectators.len() >= self.settings.max_spectators_per_match
-                            || self.spectator_count() >= self.settings.max_spectators =>
+                            || self.spectator_count() + self.multi_spectator_count() >= self.settings.max_spectators =>
                     {
                         Some(LobbyProblem::WatchersFull)
                     }
@@ -1217,6 +1327,9 @@ impl Hub {
                 } else if self.no_spectators.insert(key) {
                     if let Some((mid, _)) = self.live_match_of(&user.name) {
                         self.close_spectators(&mid, now);
+                    }
+                    if let Some((mid, _)) = self.live_multi_of(&user.name) {
+                        self.close_multi_spectators(&mid, now);
                     }
                 }
             }
@@ -1252,29 +1365,46 @@ impl Hub {
         let mut busy = false;
         let ids: Vec<String> = self.matches.keys().cloned().collect();
         for mid in ids {
-            let out = self.matches.get_mut(&mid).expect("listed").game.tick(now);
-            busy |= !out.is_empty();
-            self.deliver(&mid, out, now);
-            let h = self.matches.get(&mid).expect("listed");
-            if !h.game.started() && h.game.ended().is_none() && now.saturating_sub(h.created) >= self.settings.start_ms {
-                self.log(&format!("{mid}: cancelled, both seats did not join in time"));
-                self.finish(&mid, None, now);
-                self.remove_match(&mid, now);
-                busy = true;
-                continue;
+            match catch_unwind(AssertUnwindSafe(|| self.tick_match(&mid, now))) {
+                Ok(ticked) => busy |= ticked,
+                Err(panic) => {
+                    busy = true;
+                    self.contained += 1;
+                    self.log(&format!("{mid} panicked: {}", panic_text(&*panic)));
+                    self.end_broken_match(&mid, now);
+                }
             }
-            if let Some((outcome, cause)) = h.game.ended() {
-                match h.ended_at {
-                    None => {
-                        self.finish(&mid, Some((outcome, cause)), now);
-                        busy = true;
-                    }
-                    Some(at) => {
-                        let gone = h.seats.iter().all(Option::is_none);
-                        let since = now.saturating_sub(at);
-                        if (gone && since >= crate::serve::LINGER.as_millis() as u64) || since >= ENDED_KEEP_MS {
-                            self.remove_match(&mid, now);
-                        }
+        }
+        busy
+    }
+
+    fn tick_match(&mut self, mid: &str, now: u64) -> bool {
+        let mut busy = false;
+        #[cfg(test)]
+        if let Some(h) = self.matches.get(mid) {
+            h.players.iter().for_each(|p| test_panic(p));
+        }
+        let out = self.matches.get_mut(mid).expect("listed").game.tick(now);
+        busy |= !out.is_empty();
+        self.deliver(mid, out, now);
+        let h = self.matches.get(mid).expect("listed");
+        if !h.game.started() && h.game.ended().is_none() && now.saturating_sub(h.created) >= self.settings.start_ms {
+            self.log(&format!("{mid}: cancelled, both seats did not join in time"));
+            self.finish(mid, None, now);
+            self.remove_match(mid, now);
+            return true;
+        }
+        if let Some((outcome, cause)) = h.game.ended() {
+            match h.ended_at {
+                None => {
+                    self.finish(mid, Some((outcome, cause)), now);
+                    busy = true;
+                }
+                Some(at) => {
+                    let gone = h.seats.iter().all(Option::is_none);
+                    let since = now.saturating_sub(at);
+                    if (gone && since >= crate::serve::LINGER.as_millis() as u64) || since >= ENDED_KEEP_MS {
+                        self.remove_match(mid, now);
                     }
                 }
             }
@@ -1427,7 +1557,7 @@ impl Hub {
         now: u64,
     ) {
         let humans: Vec<String> = [Some(a.clone()), b.clone()].into_iter().flatten().collect();
-        if self.matches.len() >= self.settings.max_matches {
+        if self.match_count() >= self.settings.max_matches {
             for name in &humans {
                 if let Some(cid) = self.lobby.conn_of(name) {
                     self.lobby_send(cid, LobbyEvent::Problem { problem: LobbyProblem::ServerBusy }, now);
@@ -1613,7 +1743,12 @@ impl Hub {
                     }
                     match self.accounts.user(&username) {
                         Ok(None) => {}
-                        Ok(Some(_)) => return self.auth_failed(id, AuthProblem::UsernameTaken, now),
+                        // Counted: "taken" tells which names exist, so
+                        // asking for many is limited like guessing them.
+                        Ok(Some(_)) => {
+                            self.attempts.failed(peer, None, now);
+                            return self.auth_failed(id, AuthProblem::UsernameTaken, now);
+                        }
                         Err(e) => {
                             self.log(&format!("account database error: {e}"));
                             return self.auth_failed(id, AuthProblem::Busy, now);
@@ -1657,6 +1792,13 @@ impl Hub {
                 }
                 if !self.attempts.allowed(peer, Some(&username), now) {
                     return self.auth_failed(id, AuthProblem::TooManyAttempts, now);
+                }
+                // No account has such a name or password (both rules hold
+                // since the first sign-up): no Argon2 job, and the text is
+                // not kept in the attempts' maps.
+                if check_username(&username).is_err() || password.len() > PASSWORD_MAX {
+                    self.attempts.failed(peer, None, now);
+                    return self.auth_failed(id, AuthProblem::BadCredentials, now);
                 }
                 let found = self.accounts.user(&username).unwrap_or_else(|e| {
                     (self.log)(&format!("account database error: {e}"));
@@ -2015,6 +2157,22 @@ impl Hub {
         self.multis.values().map(|h| h.spectators.len()).sum()
     }
 
+    /// Send the spectators of an N-player match away (a player turned
+    /// spectators off).
+    fn close_multi_spectators(&mut self, mid: &str, now: u64) {
+        let Some(h) = self.multis.get_mut(mid) else { return };
+        let ids = std::mem::take(&mut h.spectators);
+        let out = h.game.set_watchers(0);
+        h.game.take_spectator_messages();
+        for cid in ids {
+            self.send(cid, ServerFrame::Match(ServerMessage::Refused { reason: Refusal::NotWatchable }), now);
+            if let Some(mut c) = self.conns.remove(&cid) {
+                c.conn.close();
+            }
+        }
+        self.deliver_multi(mid, out, now);
+    }
+
     fn multi_watch_request(&mut self, id: ConnId, user: &SignedIn, match_id: String, now: u64) {
         let me = username_key(&user.name);
         let total = self.spectator_count() + self.multi_spectator_count();
@@ -2270,60 +2428,75 @@ impl Hub {
         let mut busy = false;
         let ids: Vec<String> = self.multis.keys().cloned().collect();
         for mid in ids {
-            let out = self.multis.get_mut(&mid).expect("listed").game.tick(now);
-            busy |= !out.is_empty();
-            self.deliver_multi(&mid, out, now);
-            let h = self.multis.get(&mid).expect("listed");
-            if !h.game.started() && h.game.ended().is_none() && now.saturating_sub(h.created) >= self.settings.start_ms {
-                let infos = h.game.seat_infos();
-                let joined = (0..h.game.seat_count()).any(|s| h.game.joined(s) && !infos[usize::from(s)].computer);
-                if !joined {
-                    self.log(&format!("{mid}: cancelled, no player joined in time"));
-                    self.finish_multi(&mid, None, now);
-                    self.remove_multi(&mid);
+            match catch_unwind(AssertUnwindSafe(|| self.tick_multi(&mid, now))) {
+                Ok(ticked) => busy |= ticked,
+                Err(panic) => {
                     busy = true;
-                    continue;
+                    self.contained += 1;
+                    self.log(&format!("{mid} panicked: {}", panic_text(&*panic)));
+                    self.end_broken_match(&mid, now);
                 }
-                // The players who did not come get the computer.
-                let decks: Vec<(String, DeckSubmission)> = (0..4).filter_map(|_| self.computer_deck_for()).collect();
-                if decks.is_empty() {
-                    self.log(&format!("{mid}: cancelled, no computer deck for the missing players"));
-                    self.finish_multi(&mid, None, now);
-                    self.remove_multi(&mid);
-                    busy = true;
-                    continue;
-                }
-                let mut decks = decks.into_iter().cycle();
-                let h = self.multis.get_mut(&mid).expect("listed");
-                match h.game.fill_with_computers(|| decks.next().expect("a computer deck")) {
-                    Ok((filled, out)) => {
-                        for s in &filled {
-                            h.players[usize::from(*s)] = COMPUTER_NAME.to_string();
-                        }
-                        self.log(&format!("{mid}: started; computer players for seats {filled:?}"));
-                        self.deliver_multi(&mid, out, now);
-                    }
-                    Err(e) => {
-                        self.log(&format!("{mid}: cancelled: {e}"));
-                        self.finish_multi(&mid, None, now);
-                        self.remove_multi(&mid);
-                    }
-                }
-                busy = true;
-                continue;
             }
-            if let Some((outcome, cause)) = h.game.ended() {
-                match h.ended_at {
-                    None => {
-                        self.finish_multi(&mid, Some((outcome, cause)), now);
-                        busy = true;
+        }
+        busy
+    }
+
+    fn tick_multi(&mut self, mid: &str, now: u64) -> bool {
+        let mut busy = false;
+        #[cfg(test)]
+        if let Some(h) = self.multis.get(mid) {
+            h.players.iter().for_each(|p| test_panic(p));
+        }
+        let out = self.multis.get_mut(mid).expect("listed").game.tick(now);
+        busy |= !out.is_empty();
+        self.deliver_multi(mid, out, now);
+        let h = self.multis.get(mid).expect("listed");
+        if !h.game.started() && h.game.ended().is_none() && now.saturating_sub(h.created) >= self.settings.start_ms {
+            let infos = h.game.seat_infos();
+            let joined = (0..h.game.seat_count()).any(|s| h.game.joined(s) && !infos[usize::from(s)].computer);
+            if !joined {
+                self.log(&format!("{mid}: cancelled, no player joined in time"));
+                self.finish_multi(mid, None, now);
+                self.remove_multi(mid);
+                return true;
+            }
+            // The players who did not come get the computer.
+            let decks: Vec<(String, DeckSubmission)> = (0..4).filter_map(|_| self.computer_deck_for()).collect();
+            if decks.is_empty() {
+                self.log(&format!("{mid}: cancelled, no computer deck for the missing players"));
+                self.finish_multi(mid, None, now);
+                self.remove_multi(mid);
+                return true;
+            }
+            let mut decks = decks.into_iter().cycle();
+            let h = self.multis.get_mut(mid).expect("listed");
+            match h.game.fill_with_computers(|| decks.next().expect("a computer deck")) {
+                Ok((filled, out)) => {
+                    for s in &filled {
+                        h.players[usize::from(*s)] = COMPUTER_NAME.to_string();
                     }
-                    Some(at) => {
-                        let gone = h.seats.iter().all(Option::is_none);
-                        let since = now.saturating_sub(at);
-                        if (gone && since >= crate::serve::LINGER.as_millis() as u64) || since >= ENDED_KEEP_MS {
-                            self.remove_multi(&mid);
-                        }
+                    self.log(&format!("{mid}: started; computer players for seats {filled:?}"));
+                    self.deliver_multi(mid, out, now);
+                }
+                Err(e) => {
+                    self.log(&format!("{mid}: cancelled: {e}"));
+                    self.finish_multi(mid, None, now);
+                    self.remove_multi(mid);
+                }
+            }
+            return true;
+        }
+        if let Some((outcome, cause)) = h.game.ended() {
+            match h.ended_at {
+                None => {
+                    self.finish_multi(mid, Some((outcome, cause)), now);
+                    busy = true;
+                }
+                Some(at) => {
+                    let gone = h.seats.iter().all(Option::is_none);
+                    let since = now.saturating_sub(at);
+                    if (gone && since >= crate::serve::LINGER.as_millis() as u64) || since >= ENDED_KEEP_MS {
+                        self.remove_multi(mid);
                     }
                 }
             }

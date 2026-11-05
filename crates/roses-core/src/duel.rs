@@ -1,5 +1,5 @@
 //! Duel rules traced from the PAL executable and checked against saved
-//! original states (private evidence under `work/research/duel/`).
+//! original states (private evidence under the project notes).
 //!
 //! Scope: summoning monsters, setting magic/power-up/trap/ritual cards
 //! face-down, movement, monster/leader battles, terrain and attribute rules,
@@ -14,7 +14,7 @@
 //! fusions, summoning onto own units, leader abilities other than #2, #4, #6,
 //! #8, #9, #10, #12 and #14, control changes, the low-LP special draw and the
 //! summon-onto-full-field "dust" result. The families traced in
-//! `claude-effects/next/` (direct LP damage, Magic Jammer, battle-damage
+//! the project notes (direct LP damage, Magic Jammer, battle-damage
 //! shields, the entry-4 destruction effects of F04/F05, the flip boost by card
 //! id) are implemented with their notes' section numbers in the comments.
 //!
@@ -1137,7 +1137,7 @@ impl Duel {
         // displayed: #0 has no gameplay query, #1 is only read for
         // pad-controlled sides (0x1D61C4, campaign save bookkeeping, not
         // modelled), #2 "Face-down Card Prediction" has no consumer at all
-        // (no call site asks 0x273070 for n = 2; claude-effects/next/
+        // (no call site asks 0x273070 for n = 2; the project notes
         // ABILITY-2.md), #3 permits the low-LP special draw (refused at turn
         // start for the sides that arm it). Of the rank abilities #4 (leader
         // steps), #6 (halved direct damage), #8 (the same-type summon
@@ -3471,7 +3471,7 @@ impl Duel {
             // Filter 0x1A takes the card as its target: Man-Eater Bug's event
             // 0x15 destroys it (no 0x5F record, no +6) and the Bug advances
             // (0x20B); Nightmare Scorpion's bind event {0, 0, card, 1} runs,
-            // then 0x5F removes the card as usual [emu claude-effects
+            // then 0x5F removes the card as usual [emu the project notes
             // tools/flip-card FC1/FC3].
             if a.face_up && !a.committed_face_up && acard.entries[3].is_some() {
                 self.battle_reveal(att, events);
@@ -6630,7 +6630,7 @@ impl Duel {
             side.stars = (i32::from(side.stars) + gain).clamp(0, i32::from(MAX_STARS)) as u8;
         }
         // Destiny Draw arming 0x270800 after the stars (0x269CBC–0x269D58;
-        // claude-effects/SPECIAL-DRAW.md §2, ABILITY-3-CPU.md §2).
+        // the project notes §2, ABILITY-3-CPU.md §2).
         self.arm_destiny(s, cards)?;
         let side = &mut self.sides[usize::from(s)];
         side.can_summon = true;

@@ -213,6 +213,184 @@ fn the_start_deadline_gives_missing_players_the_computer() {
     assert!(g.hello(&yugi_compat(), &Join::Seat { seat: Some(1) }, Some(&deck(1)), false, false, 0).is_err());
 }
 
+/// Four players in `mode`, all joined; returns the match.
+fn all_players(mode: RoomMode, seed: u64) -> MultiMatch {
+    let mut g = game(4, settings(mode), seed);
+    for s in 0..4u8 {
+        g.hello(&yugi_compat(), &Join::Seat { seat: Some(s) }, Some(&deck(usize::from(s))), false, false, 0).unwrap();
+    }
+    assert!(g.started());
+    g
+}
+
+#[test]
+fn everyone_cut_off_at_once_does_not_race_the_match_to_the_round_limit() {
+    let mut g = all_players(RoomMode::FreeForAll, 21);
+    // A network cut: all four drop within the same moment.
+    for s in 0..4u8 {
+        g.disconnect(s, 100);
+    }
+    let (round, revision) = (g.round(), g.revision());
+    let mut now = 100;
+    while now < 900 {
+        now += 10;
+        g.tick(now);
+    }
+    assert_eq!(g.ended(), None, "the match waits inside the grace");
+    assert_eq!(g.round(), round, "no turn was skipped with nobody there");
+    assert_eq!(g.revision(), revision);
+    // One comes back in time: the match goes on, with a full turn clock.
+    let (seat, _) = g.hello(&yugi_compat(), &Join::Resume { token: "token2".into() }, None, false, false, 950).unwrap();
+    assert_eq!(seat, 2);
+    g.tick(960);
+    assert_eq!(g.duel().unwrap().active, 2, "the others are skipped up to the one who returned");
+    assert!(g.duel().unwrap().alive(2));
+}
+
+#[test]
+fn everyone_gone_past_the_grace_ends_the_match_for_the_last_to_leave() {
+    let mut g = all_players(RoomMode::FreeForAll, 22);
+    // Seat 3 leaves first and seat 1 last, whatever the seat numbers.
+    for (s, at) in [(3u8, 100u64), (0, 110), (2, 120), (1, 130)] {
+        g.disconnect(s, at);
+    }
+    g.tick(1_200);
+    let (outcome, cause) = g.ended().expect("the grace is over for all");
+    assert_eq!(cause, Cause::Abandoned);
+    assert_eq!(outcome.winner, Some(1), "the last to leave outlasted the others");
+    replay_multi(g.replay(), &synthetic::catalogue(), &RulesTables::empty()).unwrap();
+}
+
+#[test]
+fn a_room_of_computers_stops_once_the_last_player_has_left() {
+    for (mode, seed, won) in [(RoomMode::FreeForAll, 23, None), (RoomMode::Teams, 24, Some(2u8))] {
+        let mut g = game(1, settings(mode), seed).with_computer_delay(350);
+        g.hello(&yugi_compat(), &Join::Seat { seat: Some(0) }, Some(&deck(0)), false, false, 0).unwrap();
+        g.disconnect(0, 10);
+        // Inside the grace the player may come back: the computers play on.
+        g.tick(500);
+        assert_eq!(g.ended(), None);
+        // Past it nobody is left to play for.
+        g.tick(1_100);
+        let (outcome, cause) = g.ended().unwrap_or_else(|| panic!("{mode:?}: computers played on"));
+        assert_eq!(cause, Cause::Abandoned);
+        let winner = outcome.winner.expect("one side is left");
+        assert_ne!(winner, 0, "a player who left does not win");
+        if let Some(w) = won {
+            assert_eq!(winner / 2, w / 2, "2v2: the team without the player who left");
+        }
+        replay_multi(g.replay(), &synthetic::catalogue(), &RulesTables::empty()).unwrap();
+    }
+    // A player knocked out who stays connected keeps watching the rest.
+    let mut g = game(1, settings(RoomMode::FreeForAll), 25).with_computer_delay(350);
+    let mut clients = vec![ClientState::new(), ClientState::new(), ClientState::new(), ClientState::new()];
+    let (_, out) = g.hello(&yugi_compat(), &Join::Seat { seat: Some(0) }, Some(&deck(0)), false, false, 0).unwrap();
+    take(&mut clients, out);
+    g.handle(0, clients[0].forfeit(), 1);
+    g.tick(2_000);
+    assert_eq!(g.ended(), None, "still on the screen: the match goes on");
+    // Closing the game then ends it at once.
+    g.disconnect(0, 2_100);
+    assert_eq!(g.ended().map(|e| e.1), Some(Cause::Abandoned));
+}
+
+#[test]
+fn a_refused_handshake_does_not_lose_the_revisions_it_ran() {
+    // Seat 1 never came, so the computer took it; seat 0 plays on.
+    let mut g = game(2, settings(RoomMode::FreeForAll), 26).with_computer_delay(100);
+    let mut clients = vec![ClientState::new(), ClientState::new(), ClientState::new(), ClientState::new()];
+    let (_, out) = g.hello(&yugi_compat(), &Join::Seat { seat: Some(0) }, Some(&deck(0)), false, false, 0).unwrap();
+    take(&mut clients, out);
+    let (_, out) = g.fill_with_computers(|| ("Synthetic Pegasus".into(), deck(1))).unwrap();
+    take(&mut clients, out);
+    // Hand the turn to the computers so that the clock moves the match.
+    let mut now = 0;
+    while g.duel().unwrap().active == 0 {
+        now += 10;
+        let m = clients[0].command(roses_core::duel::DuelCommand::EndTurn);
+        let out = g.handle(0, m, now);
+        take(&mut clients, out);
+    }
+    assert_eq!(clients[0].revision, g.revision());
+    let mut refused = 0;
+    for _ in 0..50 {
+        now += 150;
+        let before = g.revision();
+        // The late player's stale resume is refused while the clock is due.
+        match g.hello(&yugi_compat(), &Join::Resume { token: "token1".into() }, None, false, false, now) {
+            Err(_) => refused += u32::from(g.revision() > before),
+            Ok(_) => panic!("a computer's seat cannot be resumed"),
+        }
+        let out = g.tick(now);
+        take(&mut clients, out);
+        assert_eq!(clients[0].revision, g.revision(), "seat 0 got every revision");
+        if g.duel().unwrap().active == 0 {
+            break;
+        }
+    }
+    assert!(refused > 0, "a revision was run by a refused handshake");
+}
+
+#[test]
+fn nobody_watching_costs_no_spectator_frames_and_a_late_spectator_starts_fresh() {
+    let mut g = game(1, settings(RoomMode::FreeForAll), 27).with_computer_delay(0);
+    g.hello(&yugi_compat(), &Join::Seat { seat: Some(0) }, Some(&deck(0)), false, false, 0).unwrap();
+    g.handle(0, ClientMessage::Command { seq: 1, base_revision: 0, command: roses_core::duel::DuelCommand::EndTurn }, 1);
+    assert!(g.revision() > 0);
+    assert!(g.take_spectator_messages().is_empty(), "no frame is built for nobody");
+    // The first spectator's snapshot is the current state; frames follow.
+    let shot = g.spectator_snapshot().unwrap();
+    assert_eq!(shot.revision, g.revision());
+    g.set_watchers(1);
+    g.take_spectator_messages();
+    let mut now = 10;
+    while g.ended().is_none() && g.take_spectator_messages().is_empty() && now < 5_000 {
+        now += 10;
+        let m = ClientMessage::Command { seq: now, base_revision: g.revision(), command: roses_core::duel::DuelCommand::EndTurn };
+        g.handle(0, m, now);
+    }
+    assert!(now < 5_000, "a spectator gets the next revision");
+}
+
+#[test]
+fn signing_in_from_a_second_place_closes_the_first_places_rooms() {
+    use crate::lobby::{Action, Lobby};
+    use roses_net::lobby::LobbyEvent;
+    let mut lobby = Lobby::new(false);
+    lobby.enter("Yugi", 1, false);
+    lobby.enter("Kaiba", 2, false);
+    let actions = lobby.request("Yugi", &LobbyRequest::CreateModeRoom { settings: RoomSettings::default() }, 0);
+    let code = actions
+        .iter()
+        .find_map(|a| match a {
+            Action::Send(_, LobbyEvent::ModeRoom { room }) => Some(room.code.clone()),
+            _ => None,
+        })
+        .unwrap();
+    lobby.request("Kaiba", &LobbyRequest::JoinModeRoom { code: code.clone() }, 0);
+    // Yugi's second game: the first connection is signed out, and his room
+    // (where Kaiba sits) must not stay open with nobody hosting it.
+    let actions = lobby.enter("Yugi", 3, false);
+    assert!(actions.iter().any(|a| matches!(a, Action::Send(2, LobbyEvent::ModeRoomClosed))), "{actions:?}");
+    let again = lobby.request("Joey", &LobbyRequest::JoinModeRoom { code: code.clone() }, 0);
+    assert!(again.is_empty() || !again.iter().any(|a| matches!(a, Action::Send(_, LobbyEvent::ModeRoom { .. }))));
+    // Kaiba may open his own room; Yugi's old 2-player room is gone as well.
+    let actions = lobby.request("Kaiba", &LobbyRequest::CreateModeRoom { settings: RoomSettings::default() }, 0);
+    assert!(actions.iter().any(|a| matches!(a, Action::Send(2, LobbyEvent::ModeRoom { .. }))), "{actions:?}");
+    let actions = lobby.request("Yugi", &LobbyRequest::CreateRoom { map: None }, 0);
+    let room = actions
+        .iter()
+        .find_map(|a| match a {
+            Action::Send(3, LobbyEvent::RoomOpened { code }) => Some(code.clone()),
+            _ => None,
+        })
+        .unwrap();
+    lobby.enter("Yugi", 4, false);
+    lobby.enter("Joey", 5, false);
+    let actions = lobby.request("Joey", &LobbyRequest::JoinRoom { code: room }, 0);
+    assert!(!actions.iter().any(|a| matches!(a, Action::PairPrivate(..))), "a room of the old connection cannot pair: {actions:?}");
+}
+
 // ---- the hub: rooms, the start, old clients ---------------------------------
 
 fn hub_settings() -> HubSettings {
@@ -361,6 +539,112 @@ fn a_2v2_room_with_shared_lp_plays_to_the_end_and_team_mates_win_together() {
             assert!(v.board.units.iter().all(|u| usize::from(u.side) != s));
         }
     }
+}
+
+/// A running N-player room of Yugi and three computers that hardly move,
+/// and the match's id and Yugi's match connection.
+fn yugi_with_computers(
+    hub: &Running,
+    invite: &str,
+) -> (roses_net::friends::LobbyClient, String, impl roses_net::transport::Connection<ClientMessage, ServerMessage>) {
+    use roses_net::transport::{Connection, Received};
+    let mut yugi = sign_up(hub, "Yugi", invite);
+    yugi.send(LobbyRequest::CreateModeRoom { settings: RoomSettings::default() });
+    until(&mut yugi, "room", |c| c.mode_room.is_some());
+    yugi.send(LobbyRequest::StartModeRoom);
+    until(&mut yugi, "ready", |c| c.multi_ready.is_some());
+    let ready = yugi.multi_ready.clone().unwrap();
+    let mut conn = hub.match_connector()().unwrap();
+    conn.send(&ClientMessage::hello(yugi_compat(), Join::Ticket { ticket: ready.ticket }, Some(deck(0)), false)).unwrap();
+    let start = std::time::Instant::now();
+    loop {
+        if let Received::Message(ServerMessage::Snapshot { .. }) = conn.poll() {
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(20), "the match did not start");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    (yugi, ready.match_id, conn)
+}
+
+#[test]
+fn turning_spectators_off_sends_away_the_watchers_of_an_n_player_match() {
+    use roses_net::transport::{Connection, Received};
+    let settings = HubSettings { multi_computer_delay_ms: 600_000, ..HubSettings::default() };
+    let (hub, invite) = Running::with_settings(false, 2, settings, None);
+    let (mut yugi, match_id, _seat) = yugi_with_computers(&hub, &invite);
+    let mut kaiba = sign_up(&hub, "Kaiba", &invite);
+    kaiba.send(LobbyRequest::Watch { match_id });
+    until(&mut kaiba, "watch ticket", |c| c.watch.is_some());
+    let ticket = kaiba.watch.clone().unwrap().ticket;
+    let mut watcher = hub.match_connector()().unwrap();
+    watcher.send(&ClientMessage::hello(yugi_compat(), Join::Watch { ticket }, None, false)).unwrap();
+    let wait_for = |watcher: &mut dyn Connection<ClientMessage, ServerMessage>, what: &str, done: &dyn Fn(&ServerMessage) -> bool| {
+        let start = std::time::Instant::now();
+        loop {
+            if let Received::Message(m) = watcher.poll() {
+                if done(&m) {
+                    return;
+                }
+            }
+            assert!(start.elapsed() < Duration::from_secs(20), "{what}");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    };
+    wait_for(&mut watcher, "the spectator's snapshot", &|m| matches!(m, ServerMessage::Snapshot { .. }));
+    yugi.send(LobbyRequest::AllowSpectators { allow: false });
+    wait_for(&mut watcher, "sent away", &|m| matches!(m, ServerMessage::Refused { reason: roses_net::Refusal::NotWatchable }));
+}
+
+#[test]
+fn the_match_limit_counts_n_player_matches_for_a_2_player_match_too() {
+    let settings = HubSettings { multi_computer_delay_ms: 600_000, max_matches: 1, ..HubSettings::default() };
+    let (hub, invite) = Running::with_settings(false, 3, settings, None);
+    let (_yugi, _, _seat) = yugi_with_computers(&hub, &invite);
+    let mut kaiba = sign_up(&hub, "Kaiba", &invite);
+    let mut joey = sign_up(&hub, "Joey", &invite);
+    kaiba.send(LobbyRequest::Challenge { to: "Joey".into(), map: None });
+    until(&mut joey, "challenge", |c| !c.incoming.is_empty());
+    let id = joey.incoming[0].0;
+    joey.send(LobbyRequest::Answer { id, accept: true });
+    until(&mut joey, "busy", |c| c.note.as_deref() == Some(&LobbyProblem::ServerBusy.to_string()));
+    assert!(joey.ready.is_none());
+    assert_eq!(hub.stop().match_count(), 1);
+}
+
+#[test]
+fn log_ins_no_account_can_match_and_probes_for_taken_names_are_limited() {
+    use crate::accounts::PasswordCost;
+    use crate::hub::ATTEMPTS_PER_ADDRESS;
+    use roses_net::lobby::AuthProblem;
+    let settings = HubSettings { open_signup: true, password_cost: PasswordCost::TEST, ..HubSettings::default() };
+    let peer = Some("203.0.113.9".parse().unwrap());
+    let (hub, _) = Running::with_settings(false, 1, settings, peer);
+    let mut owner = hub.lobby();
+    owner.send(LobbyRequest::SignUp { username: "Yugi".into(), password: "heart of cards".into(), invite: String::new() });
+    until(&mut owner, "sign-up", |c| c.user.is_some());
+    // Shapes no account has: refused as a wrong password, and counted.
+    let mut c = hub.lobby();
+    let answer = |c: &mut roses_net::friends::LobbyClient, request: LobbyRequest| {
+        c.send(request);
+        until(c, "an answer", |c| c.auth_problem.is_some());
+        c.auth_problem.unwrap()
+    };
+    let long_name = LobbyRequest::LogIn { username: "x".repeat(4096), password: "heart of cards".into() };
+    assert_eq!(answer(&mut c, long_name), AuthProblem::BadCredentials);
+    let long_password = LobbyRequest::LogIn { username: "Yugi".into(), password: "y".repeat(65) };
+    assert_eq!(answer(&mut c, long_password), AuthProblem::BadCredentials);
+    // The real account still signs in with its real password.
+    let good = LobbyRequest::LogIn { username: "Yugi".into(), password: "heart of cards".into() };
+    c.send(good);
+    until(&mut c, "signed in", |c| c.user.is_some());
+    // Asking for taken names runs out like guessing does.
+    let mut probe = hub.lobby();
+    let taken = || LobbyRequest::SignUp { username: "Yugi".into(), password: "any password".into(), invite: String::new() };
+    for _ in 2..ATTEMPTS_PER_ADDRESS {
+        assert_eq!(answer(&mut probe, taken()), AuthProblem::UsernameTaken);
+    }
+    assert_eq!(answer(&mut probe, taken()), AuthProblem::TooManyAttempts);
 }
 
 #[test]

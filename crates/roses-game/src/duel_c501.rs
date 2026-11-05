@@ -1,6 +1,6 @@
 //! CMODULE c501 (0x1F5), the graveyard revival (Mimicat, Monster Reborn;
 //! event 1 bit 17, handler 0x2586A0), as traced in
-//! `claude-activate/MIMICAT.md` [F code; emu: `tools/mf_c501_model.py`
+//! the project notes [F code; emu: `tools/mf_c501_model.py`
 //! equal to the interpreter on four runs]: c502's frame and walls without
 //! the tile sink, colour (64, 80, 96):
 //! - u 1..53: the frame round the 48 x 48 cell, alpha min(255, 16 (u - 1)),

@@ -455,7 +455,7 @@ pub const PORTED_CONTROLLERS: [u8; 21] = [
 /// sends all four to the generic module (j-stub 0x154AE0 → driver 0x172C40,
 /// decide 0x16DA10), ported as Shadi's [`shadi`]: the module never reads its
 /// control byte, so they plan exactly as control 16 does [F
-/// `work/research/modes/custom-duel/NOTES.md`].
+/// the project notes].
 pub const VS_CONTROLLERS: [u8; 4] = [22, 23, 24, 25];
 
 /// Whether `controller` has a ported module (a campaign controller or a

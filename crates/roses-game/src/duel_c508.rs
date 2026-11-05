@@ -1,5 +1,5 @@
 //! CMODULE c508 (0x1FC) "LP recovery", as traced in
-//! `claude-activate/EFFECT-MODULES-2.md` 2 [F code; emu: the model matched
+//! the project notes 2 [F code; emu: the model matched
 //! the interpreter (+600 and -1234) to 0.0625 px]. Screen anchored (nodes
 //! at view (0, 0) on the depth-800 plane), Z max, over the board:
 //! - SPARKLES: 64 twinkling TEXEFF 8 stars falling and spiralling out

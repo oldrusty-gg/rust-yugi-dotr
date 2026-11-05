@@ -1,6 +1,6 @@
 //! Duel-rule getters the HUD reads every frame, as pure functions of the
 //! engine state, traced from the PAL executable (private research:
-//! `work/research/duel/claude-screen/hud/`, `NOTES.md` "Rust port").
+//! the project notes, `NOTES.md` "Rust port").
 //!
 //! | original | here |
 //! |---|---|

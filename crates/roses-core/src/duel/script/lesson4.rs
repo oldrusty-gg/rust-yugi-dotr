@@ -7,7 +7,7 @@
 //! graveyard cards, limited and full range traps (Spellbinding Circle,
 //! Mirror Force), a face-up trap and a ritual (Ultimate Dragon).
 //!
-//! Every arm follows `steps-35.txt` (claude-tutorial, decoded from the PAL
+//! Every arm follows `steps-35.txt` (the project notes, decoded from the PAL
 //! executable) in execution order; the shared handlers are 0x17984C (wait
 //! 14, key), 0x179C94 (wait 8, key), 0x178F7C (message), 0x17A1E4 (blink),
 //! 0x17A69C / 0x17A294 (FADEOUT 16 / 8 and the setup), 0x17AB58 (wait 32),

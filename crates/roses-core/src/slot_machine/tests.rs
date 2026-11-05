@@ -1,5 +1,5 @@
 //! Ordinary tests with synthetic flag tables. The numbers come from the
-//! interpreter runs of `claude-end/run2.py` and `run3.py` on saved state
+//! interpreter runs of the project notes and `run3.py` on saved state
 //! 767 (player vs Weevil, RNG state 0x11054A74C1E17A22 at the duel's end,
 //! no LCG call in the result states); the private test at the end reads
 //! the real flag bytes from the executable.

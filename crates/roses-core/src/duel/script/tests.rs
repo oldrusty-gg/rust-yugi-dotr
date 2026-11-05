@@ -633,9 +633,9 @@ fn script_edits_follow_the_traced_primitives() {
 /// Private checks against the original: `ROSES_TEST_CATALOGUE` = the
 /// imported `catalogue.json` (`roses import-duel`), `ROSES_TEST_ELF_PATH` =
 /// the PAL executable (deck records 0x13/0x14 are read from its static
-/// deck table), `ROSES_TEST_SESSION` = `claude-pine/session` (the `.json`
+/// deck table), `ROSES_TEST_SESSION` = the project notes (the `.json`
 /// summaries of states 133–186), `ROSES_TEST_TUTORIAL` = the
-/// `claude-tutorial` research folder (`emu-33.txt`).
+/// the project notes research folder (`emu-33.txt`).
 mod private {
     use super::*;
     use std::path::PathBuf;

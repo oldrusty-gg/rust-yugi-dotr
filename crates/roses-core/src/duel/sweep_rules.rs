@@ -1,5 +1,5 @@
 //! Effects ported by the refusal sweep (PAL SLES_515.79; private notes
-//! `claude-effects/REFUSALS-SWEEP.md`). Tags: [F] read from the code,
+//! the project notes). Tags: [F] read from the code,
 //! [emu] the game's own code in the EE interpreter (cases named in the
 //! notes), [H] hypothesis.
 

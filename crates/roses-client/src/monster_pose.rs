@@ -2,7 +2,7 @@
 //! (`roses_assets::MonsterModel`), independent of any renderer.
 //!
 //! Ports of the PAL EE routines as decoded in the private model research
-//! (`work/research/duel/claude-models/NOTES.md`, reference scripts
+//! (the project notes, reference scripts
 //! `pose.py`, `verify_*.py`):
 //!
 //! - key sampling 0x210480: a channel with fewer than three keys is constant
@@ -203,7 +203,7 @@ pub struct PoseBlend<'a> {
 
 /// 0x20C9B0: blend two rotations component-wise; B is replaced by the
 /// equivalent (x + pi, pi - y, z + pi) when that is closer to A [F
-/// claude-models/NOTES.md; "closer" = smaller sum of wrapped component
+/// the project notes; "closer" = smaller sum of wrapped component
 /// distances, H].
 pub fn blend_angles(a: [i32; 3], b: [i32; 3], w: f32) -> [i32; 3] {
     let wrap = |d: i32| {

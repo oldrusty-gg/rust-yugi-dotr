@@ -1,6 +1,6 @@
 //! SYSTEM icon 3: the tutorial's lesson menu ("HELP"), W+543E / W+543F /
 //! W+546D at 0x2376E4..0x2378B4, drawn by 0x23B770; private notes in
-//! `work/research/modes/tutorial45/NOTES.md` [F, emu].
+//! the project notes [F, emu].
 //!
 //! × on the icon (state 0): SE 4, W+543E = 1, W+543F = 0, W+546D = 0. State
 //! 1 slides the window in over 8 updates (W+543F to 8; the window's y is

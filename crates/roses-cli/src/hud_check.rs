@@ -1,6 +1,6 @@
 //! Private checks: the GS sprite model in `roses_client::gs` against a
 //! software-GS draw dump of an original duel frame
-//! (`work/research/duel/claude-screen/`), using textures decoded from
+//! (the project notes), using textures decoded from
 //! the user's disc; and the duel HUD port `roses_client::duel_hud` against
 //! the primitive lists the game's own HUD routine produced for savestates.
 #[cfg(test)]

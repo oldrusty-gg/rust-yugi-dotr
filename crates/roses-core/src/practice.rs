@@ -8,7 +8,7 @@
 //! (0x1AEA1C, 0x1AEAC0).
 //!
 //! Observed, not decoded (saved original states, see private
-//! `work/research/duel`): for pair 0 the leaders stand at column 3,
+//! the project notes): for pair 0 the leaders stand at column 3,
 //! rows 6 (side 0) and 0 (side 1); every cell has terrain code 7 (map 0); the
 //! tutorial's first hand is the first five cards of side 0's record in table
 //! order (no shuffle observed for this pair). Other pairs, shuffling in other

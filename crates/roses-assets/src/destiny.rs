@@ -1,6 +1,6 @@
 //! The Destiny Draw's card rows from the PAL executable.
 //!
-//! The low-LP special draw (research: `claude-effects/SPECIAL-DRAW.md` §3)
+//! The low-LP special draw (research: the project notes §3)
 //! replaces the last card of a summon refill with one of three ids taken
 //! from a fixed row: `u16[3]` at EE 0x2B7AF0 + 6·row, row = the situation
 //! 1..=7 in the low nibble of the side's Destiny byte. Row 0 (and the row

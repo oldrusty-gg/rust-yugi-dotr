@@ -1,5 +1,5 @@
 //! CMODULE c509 (0x1FD), the event-9 damage effect (Tremendous Fire,
-//! Sparks, Hinotama, ...), as specified in `claude-activate/C509-DAMAGE.md`
+//! Sparks, Hinotama, ...), as specified in the project notes
 //! [F code; emu: the reference model `tools/mf_c509_model.py` equals the
 //! interpreter's primitives to 0.0625 px]. World-anchored:
 //! - three homing FIREBALLS from the card cell centre, 12 units per update

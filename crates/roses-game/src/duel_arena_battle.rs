@@ -3,7 +3,7 @@
 //! path, the defender's answer, the loser's destroy orbit, the winner's
 //! victory pose and the fade back to the versus cards.
 //!
-//! Traced in `claude-units/ARENA-ATTACK.md` [F, emu footage 016-088 where
+//! Traced in the project notes [F, emu footage 016-088 where
 //! marked there]; this module follows its sub-phase table update by update:
 //! - sub 0 waits for the stage path (run by `ArenaShot` before this starts);
 //! - sub 1-2: polar (max(size, 50), -pi/4, pi/8) around the attacker's
@@ -20,8 +20,8 @@
 //! - phase 6: yaw -pi/128 per update while both fades rise 4 per update
 //!   (32 updates).
 //!
-//! The attack effects (BMODULE) run headless in the EE interpreter
-//! (`roses_ee::effects`); their return codes drive the target's reaction,
+//! The attack effects (BMODULE) run headless as hand ports
+//! (`roses_fx::bmodule`); their return codes drive the target's reaction,
 //! its hold and release, the module-end camera and the gates of sub 4 / 9
 //! as 0x1F52E0 does. Without an effect program the effect is taken to end
 //! with the camera (a destroyed target then starts motion 4 there).
@@ -30,7 +30,7 @@
 //! Sound: each unit's model cues (0x1EEC80) before its motion step, timed
 //! by the attack effect's task counter while one is attached (the effect's
 //! own sounds; no module calls the SE player), c621's SECTL cue, and the
-//! task killed by phase 7 after a skip [F; emu `claude-bmodule/emu_se.py`].
+//! task killed by phase 7 after a skip [F; emu the project notes].
 //! Not reproduced [H, reported by the renderer]: c621's drawing (its
 //! timing is the footage's: result 2 after 33 updates, 180 updates long),
 //! the motion blends (0x1F2760's 6 updates), the lights 2-5, and the module-end camera's length (30 updates; the original's is
@@ -54,8 +54,8 @@ pub struct ArenaUnitData {
     /// The slot's first and second CMOT (object +0x16C / +0x170).
     pub attack_camera: Option<Cmot>,
     pub victory_camera: Option<Cmot>,
-    /// The attack effect's return codes, launch first (BMODULE run headless
-    /// by `roses_ee::effects`); `None`: not available (the effect is then
+    /// The attack effect's return codes, launch first (BMODULE port run
+    /// headless, `roses_fx::bmodule`); `None`: not available (the effect is then
     /// taken to end with the camera).
     pub effect: Option<Vec<i32>>,
 }
@@ -112,7 +112,7 @@ pub struct Unit {
 
 /// The previous motion during a blend: it keeps advancing; the current
 /// motion's weight per draw is 0, 0, 1/n .. (n-2)/n, then 1 [F
-/// claude-models/NOTES.md for n = 6; n = 16 for the release, H].
+/// the project notes for n = 6; n = 16 for the release, H].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MotionBlend {
     pub previous: MotionClock,
@@ -429,7 +429,7 @@ pub struct FxShared {
 /// Newlib rand draws (0x19AE88) the game makes every frame outside the
 /// battle's own: 0x20A950 (ra 0x20A980) and 0x100820 (ra 0x100830, the main
 /// loop's discarded draw), both before the battle logic [emu
-/// `claude-bmodule/emu_rand.py 28`: 2 per frame in all 1,224 frames].
+/// the project notes 28`: 2 per frame in all 1,224 frames].
 pub const FRAME_RAND_DRAWS: u32 = 2;
 
 /// 0x1D151C / 0x1F5854's test: int(k * (float(r) / 2^31)) != 0 (cvt.s.w,
@@ -1133,7 +1133,7 @@ mod private_sound {
     use super::*;
 
     /// The footage battle's sound requests against the emulator's
-    /// (`claude-bmodule/emu_se.py 28`: every SE request sent to the IOP,
+    /// (the project notes 28`: every SE request sent to the IOP,
     /// with its frame; B220 launches at frame 95641). Needs private
     /// imports and `ROSES_SE_TRACE` = that json.
     #[test]

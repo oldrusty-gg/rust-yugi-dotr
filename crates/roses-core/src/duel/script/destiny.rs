@@ -1,5 +1,5 @@
 //! The Destiny Draw of a scripted side: the low-LP special draw as lesson 3
-//! exercises it (research: `claude-effects/SPECIAL-DRAW.md`, tags as in
+//! exercises it (research: the project notes, tags as in
 //! `script.rs`).
 //!
 //! The rules engine keeps the per-side Destiny byte (`SideState::destiny`,

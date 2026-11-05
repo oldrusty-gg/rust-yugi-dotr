@@ -1,6 +1,6 @@
 //! The White Rose (Yorkist) side of the campaign map (SAVE[0] = 1). Source
 //! facts (PAL SLES_515.79, private research
-//! `story/claude-campaign-map/WHITE-ROUTE-AUDIT.md`, tags [F] code/data,
+//! `story/the project notes, tags [F] code/data,
 //! [emu] the game's code run frame by frame by `tools/run_white.py`, logs
 //! `logs/white-*.txt`, [H] hypothesis):
 //!

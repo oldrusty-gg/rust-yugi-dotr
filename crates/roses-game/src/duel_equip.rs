@@ -1,5 +1,5 @@
 //! The equip / power-up pair modules of a summon chain, as traced in
-//! `claude-equip/EQUIP-MODULES.md` [F + emu: the original module code run
+//! the project notes [F + emu: the original module code run
 //! headless in the EE interpreter; no footage of an equip pair exists].
 //!
 //! Every module keeps C538's card choreography without the spin (both

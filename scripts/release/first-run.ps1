@@ -1,4 +1,4 @@
-# First-run check of a friends package on a "clean machine": unzips the
+# First-run check of a release package on a "clean machine": unzips the
 # package into a fresh folder, starts its launcher with that folder's own
 # (empty) roses-data, presses Import ISO and then Play through the real
 # window's buttons, and waits for the game log to reach the title.

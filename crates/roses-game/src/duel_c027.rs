@@ -1,6 +1,6 @@
 //! CMODULE c027 (0x1B), Change of Heart on the target (event 0x1A, handler
 //! 0x25E300, launched at E+128 after c026), as specified in
-//! `claude-activate/C026-C027-CHANGE-OF-HEART.md` section 2 [F code; emu: the
+//! the project notes section 2 [F code; emu: the
 //! reference model `tools/mf_c027_model.py` equals the interpreter's
 //! primitives to 0.0626 px in four runs]. Billboards anchored at the target
 //! unit's board position U (the cell centre, y 0), every local point at z 30

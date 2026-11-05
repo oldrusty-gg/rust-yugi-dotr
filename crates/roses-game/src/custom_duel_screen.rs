@@ -3,7 +3,7 @@
 //! from the user's TEXSYS.MRG atlases, PICMINI portraits and message font.
 //! Bevy-free; the scene is `custom_duel_render.rs` in the binary.
 //!
-//! Provenance (`work/research/modes/custom-duel/NOTES.md` §5): the
+//! Provenance (the project notes §5): the
 //! draw functions 0x1C82B0, 0x1C85E0, 0x1C8A40, 0x1C8B60, 0x1C93D0,
 //! 0x1C94D0, 0x1C9C80, 0x1CA1B0, 0x1CABE0, 0x1CB890 and 0x1CD620 were read
 //! [F] and run in the EE interpreter; their leaf calls (positions, sizes,
@@ -13,8 +13,7 @@
 //! loads up to eight lines first). Two players (selector 0; `work/
 //! research/modes/two-player/NOTES.md`): the READY box of 0x1C82B0 and
 //! the Leader Ability / Card Display sub-screens 0x1CB090 / 0x1CB490 [F,
-//! emu d7-two-players]. Own maps (map editor, `work/research/modes/
-//! map-editor/NOTES.md`): Edit Map's list 0x1CC870, the map lists' own-map
+//! emu d7-two-players]. Own maps (map editor, the project notes): Edit Map's list 0x1CC870, the map lists' own-map
 //! previews read from each side's block, the chosen row's band and the
 //! terrain gauges (0x206F90) [F, emu d5-ownlist / d6-ownmaps-both].
 //! Nothing here is a game byte: strings and colours are read from the

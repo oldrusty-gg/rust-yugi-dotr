@@ -756,8 +756,8 @@ fn surrender_prompt_follows_the_traced_buttons() {
 /// Private checks against the original: `ROSES_TEST_CATALOGUE` = the
 /// imported `catalogue.json`, `ROSES_TEST_ELF_PATH` = the PAL executable
 /// (deck records 0x11/0x12 from its static deck table), `ROSES_TEST_SESSION`
-/// = `claude-pine/session` (the `.json` summaries of states 000–131),
-/// `ROSES_TEST_TUTORIAL` = the `claude-tutorial` folder (`emu-32.txt`).
+/// = the project notes (the `.json` summaries of states 000–131),
+/// `ROSES_TEST_TUTORIAL` = the the project notes folder (`emu-32.txt`).
 mod private {
     use super::*;
     use crate::duel::script::lesson_setup;

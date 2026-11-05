@@ -1,6 +1,6 @@
 //! Small speaker portraits of the story panels as the face engine draws
-//! them (PAL SLES_515.79; research `story/claude-faces/FACES.md`,
-//! `story/claude-story-red/BACKGROUNDS.md` §Faces).
+//! them (PAL SLES_515.79; research `story/the project notes,
+//! `story/the project notes §Faces).
 //!
 //! The speaker panels 0x232EF0 request a face (0x247310) instead of drawing
 //! the TEXANM record whole: top panel at 0x2330B4 {speaker, expression =

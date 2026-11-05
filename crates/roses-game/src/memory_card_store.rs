@@ -2,7 +2,7 @@
 //! local data (never shipped), holding the original's data file
 //! `BESLES-51579/BESLES-51579` byte for byte (`roses_core::memory_card`),
 //! plus what the map/title dialogs need around it (Claude, 4 Oct 2026;
-//! `work/research/story/claude-save/NOTES.md`).
+//! the project notes).
 //!
 //! Explicit differences from a PS2 card: the virtual card is always
 //! present and formatted with room to spare (the "no card", "unformatted"

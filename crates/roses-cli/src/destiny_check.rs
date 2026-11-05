@@ -1,6 +1,6 @@
 //! Private check: the engine's Destiny Draw classifier (`Duel::destiny_situation`,
 //! 0x270900 for a human side) against the game's own function on the T9 / T10 /
-//! T13 boards dumped by `claude-effects/tools/special-draw/t18_dump.py`.
+//! T13 boards dumped by the project notes.
 #[cfg(test)]
 mod tests {
     use roses_core::duel::{Duel, DuelUnit, SideState, UnitRecord};

@@ -1,0 +1,608 @@
+//! BMODULE b180 (card 366), hand-ported from the record (linked at
+//! 0x1E00000, entry 0x1E025A0, data area 0x1ED0000) [F] (helper A10, 31
+//! Oct 2026): b646's program shape (400 tasks of 0x70 bytes at D+0x2A0,
+//! alive +0x58, step +0x44 called through `jalr`; spawned by 0x1E02C60)
+//! drawn with the second library: swirl arcs (3f36e61a971c at 0x1E01230,
+//! `quads4::arc_strips_52`), an arc (e6dce326551d at 0x1E00ED0,
+//! `billboard::arc_strips`), rings of quads (7369422df7f8 at 0x1E00920,
+//! UVs by uv_rect 0x1E00080) and full-window tints (561a6131a635 at
+//! 0x1E01590, `quads4::tint4`), plus b546's unit flash (0x1E02DF0,
+//! d1cf0abc65df: the attacker drawn into the target in a packet layer,
+//! then the flash tasks 0x1E022E0 stepped). Update 1: the flash and the
+//! stage dimmed to 0x30 (0x1E021D0); update 10 an arc at the attacker's
+//! node 1; 11..199 a violet swirl there; to 200 grey rings round the
+//! target; on 20..199 every third update a black / red tint keyed by a
+//! point 50 in front of the target. Returns 1 on update 70, 4 on 230, 2 on
+//! 205, 6 on 81..199, 8 once the 245-update timer +0xB210 has run out.
+use crate::b076::node_position_saving;
+use crate::b494::camera_angles_saving;
+use crate::b590::project_residue;
+use crate::blib::{billboard, quads4, uv};
+use crate::bus::Bus;
+use crate::ee;
+use crate::exe::{Fx, OT};
+use crate::fxlib2 as l2;
+
+const D: u32 = crate::bmodule::DATA_AREA;
+const TASKS: u32 = 400;
+/// The step functions a task holds (+0x44), as the record's addresses.
+const SWIRL: u32 = 0x01E0_1AB0;
+const ARC: u32 = 0x01E0_1D00;
+const RING: u32 = 0x01E0_1EB0;
+const TINT: u32 = 0x01E0_2040;
+const LIGHT: u32 = 0x01E0_21D0;
+/// The flash tasks, run by the unit flash 0x1E02DF0.
+const FLASH: u32 = 0x01E0_22E0;
+/// The return address of the entry's `jalr` into a step (0x1E028B0 + 8).
+const TASK_RA: u64 = 0x01E0_28B8;
+const POS: u32 = D + 0x250;
+const AIM: u32 = D + 0xB1D0;
+const TEX: u32 = D + 0xB1F0;
+const TIMER: u32 = D + 0xB210;
+const COLOUR: u32 = D + 0xB214;
+const LAYER: u32 = D + 0xB224;
+const FLASH_DESC: u32 = D + 0xB228;
+const TINT_W: u32 = D + 0xB234;
+const NODE: u32 = D + 0xB248;
+const TINTS: u32 = D + 0xB2AC;
+const KIND: u32 = D + 0xB2B6;
+const FACING: u32 = D + 0xB2BA;
+const COUNTER: u32 = D + 0xB2BE;
+const BYTES: u32 = D + 0xB2C0;
+const SINES: u32 = D + 0xB4C0;
+
+fn rmod(fx: &mut Fx, s0: u32, ra: u32, m: i32) -> i32 {
+    let v = fx.rand_from(s0, ra);
+    fx.div(v, m).1
+}
+
+/// The entry 0x1E025A0.
+pub fn program(fx: &mut Fx, param: i32) -> i32 {
+    let sp = fx.enter(0x130);
+    fx.mem.write_u32(D + 0xB21C, OT);
+    fx.mem.write_u32(D + 0x80, OT);
+    let ret = if param >= 0 { init(fx, sp, param) } else { step(fx, sp, param) };
+    fx.leave(0x130);
+    ret
+}
+
+fn init(fx: &mut Fx, sp: u32, param: i32) -> i32 {
+    fx.bzero(D, 0xB630);
+    l2::sine_table(fx, SINES);
+    l2::sine_table(fx, D + 0xD8);
+    fx.mem.set16(D + 0xB2BC, param);
+    fx.mem.set32(TIMER, 0xF5);
+    for (k, node) in [1, 0x34, 0x35, 0x30, 0x2F, 0x2C].into_iter().enumerate() {
+        let h = fx.self_handle();
+        let r = fx.request_node(h, node, i32::from(k == 0));
+        fx.mem.set16(NODE + 2 * k as u32, r);
+    }
+    let h = fx.target_handle();
+    let r = fx.request_node(h, 1, 1);
+    fx.mem.set16(D + 0xB258, r);
+    for k in 0xE..0x10 {
+        let t = fx.texture(4, k);
+        fx.mem.write_u32(D + 0x298 + 4 * (k as u32 - 0xE), t);
+    }
+    let t = fx.texture(5, 0);
+    fx.mem.write_u32(TEX, t);
+    let h = fx.self_handle();
+    fx.unit_rotation(h, sp + 0x90);
+    let y = ee::div(ee::from_i32(fx.mem.i32(sp + 0x94)), 180.0);
+    fx.fix_residue(y, 0x01E0_2798);
+    fx.mem.set16(FACING, ee::fixsfsi(y));
+    for k in 0..3 {
+        fx.mem.write_u32(D + 0x10 + 4 * k, 0x3DCC_CCCD);
+    }
+    for k in 0..0x100u32 {
+        let v = rmod(fx, k, 0x01E0_27C8, 0x1E);
+        fx.mem.set8(BYTES + k, v - 0xF);
+    }
+    for k in 0..0x1Eu32 {
+        let v = fx.rand_from(k, 0x01E0_281C);
+        fx.mem.set16(D + 0xB268 + 2 * k, v % 8);
+    }
+    0
+}
+
+fn step(fx: &mut Fx, sp: u32, param: i32) -> i32 {
+    emit(fx, param);
+    // The entry's s0: the flash tasks counted here (the steps' saved s0).
+    let mut flashes = 0u32;
+    for k in 0..TASKS {
+        let t = D + 0x2A0 + 0x70 * k;
+        if fx.mem.i16(t + 0x58) == 0 {
+            continue;
+        }
+        let f = fx.mem.read_u32(t + 0x44);
+        // The step's prologue: the entry's s0 = the flashes so far, s1 = 0.
+        let frame = match f {
+            0 => continue,
+            FLASH => {
+                flashes += 1;
+                continue;
+            }
+            SWIRL | ARC => 0x30,
+            RING | TINT | LIGHT => 0x20,
+            _ => panic!("b180: unknown task step {f:#x}"),
+        };
+        let s = fx.enter(frame);
+        if frame == 0x20 {
+            fx.saved(s, &[(0x10, TASK_RA), (0, u64::from(flashes))]);
+        } else {
+            fx.saved(s, &[(0x20, TASK_RA), (0x10, 0), (0, u64::from(flashes))]);
+        }
+        match f {
+            SWIRL => swirl(fx, t),
+            ARC => arc(fx, t),
+            RING => ring(fx, t),
+            TINT => tint(fx, t),
+            _ => light(fx, t),
+        }
+        fx.leave(frame);
+    }
+    // The entry's s1: the live tasks counted in the draw loop.
+    let mut live = 0u32;
+    // a3 as the draws' last library call left it, for the unit flash's
+    // first 0x207BB0 [run, traced]: 0 after a ring (its projections'
+    // 0x20C670 loop counts a3 down to 0), after an arc the last XYZ2 its
+    // pass loaded (0 when it drew nothing), after a tint the flags 0x207E20
+    // loaded (as b546).
+    let mut a3 = 0u32;
+    let last_xyz2 = |fx: &mut Fx, before: usize| match fx.out.prims.get(before..).and_then(|p| p.last()) {
+        Some(p) => {
+            let d = p.desc;
+            let n = u32::from(fx.mem.read_u16(d));
+            fx.mem.read_u32(d + 8 + 8 * n)
+        }
+        None => 0,
+    };
+    for k in 0..TASKS {
+        let t = D + 0x2A0 + 0x70 * k;
+        if fx.mem.i16(t + 0x58) == 0 {
+            continue;
+        }
+        live += 1;
+        if fx.mem.read_u32(t + 0x44) == SWIRL {
+            fx.mem.set16(D + 0xB8, 6);
+            let h = fx.self_handle();
+            let slot = fx.mem.i16(NODE);
+            node_position_saving(fx, h, slot, t + 0x10, u64::from(flashes), Some(u64::from(live)), 0x01E0_2950);
+            let before = fx.out.prims.len();
+            quads4::arc_strips_52(fx, D, t, 0x21, t + 0x10);
+            a3 = last_xyz2(fx, before);
+            fx.mem.set16(D + 0xB8, 0);
+        }
+        if fx.mem.read_u32(t + 0x44) == ARC {
+            fx.mem.set16(D + 0xB8, 0x24);
+            let before = fx.out.prims.len();
+            billboard::arc_strips(fx, D, t, 0x21, t + 0x10);
+            a3 = last_xyz2(fx, before);
+            fx.mem.set16(D + 0xB8, 0);
+        }
+        if fx.mem.read_u32(t + 0x44) == RING {
+            let w = fx.mem.read_u32(TEX);
+            fx.mem.write_u32(D + 0x88, w);
+            let sub = fx.mem.i16(t + 0x56);
+            crate::b615::cell(fx, sp + 0x80, 0x14, sub);
+            fx.mem.set16(D + 0xB8, 4);
+            let v = fx.rand_from(flashes, 0x01E0_2A08);
+            fx.mem.set16(D + 0xBE, v % 4);
+            fx.mem.set16(D + 0xB0, 0);
+            billboard::ring_quads(fx, uv::uv_rect, D, t, 0x21, BYTES);
+            a3 = 0;
+            fx.mem.set16(D + 0xB8, 0);
+        }
+        if fx.mem.read_u32(t + 0x44) == TINT {
+            let h = fx.target_handle();
+            fx.unit_position(h, sp + 0x70);
+            // 0x1F71A0's frame below the entry's (its saved ra, s0).
+            fx.saved(sp - 0x20, &[(0x10, 0x01E0_2A68), (0, u64::from(flashes))]);
+            let z = fx.mem.f(sp + 0x78);
+            let z = if fx.mem.i16(FACING) != 0 { ee::sub(z, 50.0) } else { ee::add(z, 50.0) };
+            fx.mem.setf(sp + 0x78, z);
+            let p = [fx.mem.f(sp + 0x70), fx.mem.f(sp + 0x74), fx.mem.f(sp + 0x78)];
+            let mut x = fx.mem.read_u64(sp + 0xB8);
+            if let Some(w) = fx.project(p, None, &mut x) {
+                fx.mem.write_u64(sp + 0xB8, x);
+                fx.mem.setf(TINT_W, w);
+            }
+            project_residue(fx, sp, sp + 0x70);
+            for kind in 0..3 {
+                if fx.mem.i16(t + 0x50) == kind {
+                    let w = fx.mem.f(TINT_W);
+                    quads4::tint4(fx, t, 0x21, w);
+                    if let Some(p) = fx.out.prims.last() {
+                        let d = p.desc;
+                        a3 = u32::from(fx.mem.read_u16(d + 2));
+                    }
+                }
+            }
+        }
+    }
+    if flashes != 0 {
+        unit_flash(fx, a3);
+    }
+    let left = fx.mem.read_u32(TIMER);
+    if left != 0 {
+        fx.mem.write_u32(TIMER, left - 1);
+    }
+    match fx.mem.i16(COUNTER) {
+        0x46 => 1,
+        0xE6 => 4,
+        0xCD => 2,
+        0x51..=0xC7 => 6,
+        _ if fx.mem.i32(TIMER) > 0 => 0,
+        _ => 8,
+    }
+}
+
+/// 0x1E02C60(D, step, 0): the first free task cleared and set off at
+/// D+0x250 (i16 +0, float +0x10) with the colour D+0xB214 (twice), kind
+/// D+0xB2B6 (+0x50). Its frame saves the emitter's s0 = D and the
+/// entry's s1 = 0, s2 = D, s3 = the parameter, s4 (the runner's, 0 [H]):
+/// the s4 slot's upper half (entry sp - 0x38) is a later missing
+/// texture's TEX0 [run].
+fn spawn(fx: &mut Fx, step: u32, param: i32, ra: u32) {
+    let sp = fx.enter(0x60);
+    fx.saved(sp, &[(0x50, u64::from(ra)), (0x40, 0), (0x30, param as i64 as u64), (0x20, u64::from(D)), (0x10, 0), (0, u64::from(D))]);
+    if let Some(k) = (0..TASKS).find(|&k| fx.mem.i16(D + 0x2F8 + 0x70 * k) == 0) {
+        let t = D + 0x2A0 + 0x70 * k;
+        fx.bzero(t, 0x70);
+        fx.mem.set16(t + 0x58, 1);
+        for o in [0x60u32, 0x64] {
+            let (r, g, b) = (fx.mem.read_u8(COLOUR), fx.mem.read_u8(COLOUR + 1), fx.mem.read_u8(COLOUR + 2));
+            l2::rgb(fx, t + o, i32::from(r), i32::from(g), i32::from(b));
+            let a = fx.mem.read_u8(COLOUR + 3);
+            fx.mem.write_u8(t + o + 3, a);
+        }
+        l2::to_i16x4(fx, t, POS, 0);
+        for k in 0..3 {
+            let w = fx.mem.read_u32(POS + 4 * k);
+            fx.mem.write_u32(t + 0x10 + 4 * k, w);
+        }
+        let s = fx.mem.i16(KIND);
+        fx.mem.set16(t + 0x50, s);
+        fx.mem.write_u32(t + 0x40, 0);
+        fx.mem.write_u32(t + 0x44, step);
+    }
+    fx.leave(0x60);
+}
+
+/// 0x1E01760(D, 0): the update counter and the emitters (frame 0x20: ra,
+/// the entry's s0 = 0).
+fn emit(fx: &mut Fx, param: i32) {
+    let sp = fx.enter(0x20);
+    fx.saved(sp, &[(0x10, 0x01E0_2878), (0, 0)]);
+    let n = fx.mem.i16(COUNTER) + 1;
+    fx.mem.set16(COUNTER, n);
+    let c = |fx: &mut Fx| fx.mem.i16(COUNTER);
+    let node = |fx: &mut Fx, out: u32| {
+        let h = fx.self_handle();
+        let slot = fx.mem.i16(NODE);
+        fx.node_position(h, slot, out);
+    };
+    if (0x97..0xC8).contains(&c(fx)) {
+        node(fx, AIM);
+        let y = ee::add(fx.mem.f(AIM + 4), f32::from_bits(0x4053_3333));
+        fx.mem.setf(AIM + 4, y);
+        for k in 0..4 {
+            let w = fx.mem.read_u32(AIM + 4 * k);
+            fx.mem.write_u32(POS + 4 * k, w);
+        }
+    }
+    if (0xB..0xC8).contains(&c(fx)) {
+        node(fx, POS);
+        spawn(fx, SWIRL, param, 0x01E0_1878);
+    }
+    if c(fx) == 0xA {
+        node(fx, POS);
+        spawn(fx, ARC, param, 0x01E0_18C4);
+    }
+    if c(fx) == 1 {
+        spawn(fx, FLASH, param, 0x01E0_18F0);
+    }
+    if c(fx) == 1 {
+        spawn(fx, LIGHT, param, 0x01E0_191C);
+    }
+    if c(fx) < 0xC9 {
+        let h = fx.target_handle();
+        fx.unit_position(h, POS);
+        for (o, ra) in [(0u32, 0x01E0_1950u32), (4, 0x01E0_1984), (8, 0x01E0_19B8)] {
+            let v = rmod(fx, D, ra, 0x14);
+            let p = ee::add(fx.mem.f(POS + o), ee::from_i32(v - 0xA));
+            fx.mem.setf(POS + o, p);
+        }
+        spawn(fx, RING, param, 0x01E0_19F4);
+    }
+    let c = fx.mem.i16(COUNTER);
+    if (0x14..0xC8).contains(&c) && fx.div(c, 3).1 == 1 {
+        let k = fx.mem.i16(TINTS).wrapping_rem(2);
+        fx.mem.set16(KIND, k);
+        spawn(fx, TINT, param, 0x01E0_1A78);
+        let n = fx.mem.i16(TINTS) + 1;
+        fx.mem.set16(TINTS, n);
+    }
+    fx.leave(0x20);
+}
+
+/// Byte `at` up by `up` while under `cap`.
+fn fade_in(fx: &mut Fx, t: u32, at: u32, cap: u8, up: u8) {
+    let a = fx.mem.read_u8(t + at);
+    if a < cap {
+        fx.mem.write_u8(t + at, a.wrapping_add(up));
+    }
+}
+
+/// Byte `at` down by `down` while at least `floor`, else the task ends.
+fn fade_out(fx: &mut Fx, t: u32, at: u32, floor: u8, down: u8) {
+    let a = fx.mem.read_u8(t + at);
+    if a >= floor {
+        fx.mem.write_u8(t + at, a.wrapping_sub(down));
+    } else {
+        fx.mem.set16(t + 0x58, 0);
+    }
+}
+
+fn age(fx: &mut Fx, t: u32) {
+    let n = fx.mem.i16(t + 0x54) + 1;
+    fx.mem.set16(t + 0x54, n);
+}
+
+/// z 5 toward the facing.
+fn push_z(fx: &mut Fx, t: u32) {
+    let z = fx.mem.f(t + 0x18);
+    let z = if fx.mem.i16(FACING) != 0 { ee::sub(z, 5.0) } else { ee::add(z, 5.0) };
+    fx.mem.setf(t + 0x18, z);
+}
+
+fn node_at(fx: &mut Fx, t: u32, ra: u32) {
+    let h = fx.self_handle();
+    let slot = fx.mem.i16(NODE);
+    node_position_saving(fx, h, slot, t + 0x10, u64::from(t), Some(u64::from(D)), ra);
+}
+
+/// 0x1E01AB0 (D, task): a violet swirl arc at node 1 (5 toward the
+/// facing): radii 11, start +0x52 random, step 60, span 6, facing away
+/// (+0x20 0x4000 / 0xC000); its height +0x34 -(15..44) sinking by 9 x
+/// +0x38 (15..24) while the outer radius widens by 0.5 x +0x30 (25..54);
+/// in by 0x60 under 0xC0 for 4 updates, out by 9.
+fn swirl(fx: &mut Fx, t: u32) {
+    let f = SWIRL;
+    if fx.mem.i16(t + 0x58) == 1 {
+        fx.mem.write_u32(t + 0x4C, 0x4130_0000);
+        fx.mem.write_u32(t + 0x48, 0x4130_0000);
+        l2::rgb(fx, t + 0x64, 0xFF, 0xFF, 0xFF);
+        l2::rgb(fx, t + 0x60, 0x80, 0x40, 0xFF);
+        let v = rmod(fx, t, f + 0x60, 0x168);
+        fx.mem.set16(t + 0x52, v);
+        fx.mem.set16(t + 0x5A, 0x3C);
+        fx.mem.set16(t + 0x5C, 6);
+        fx.mem.set16(t + 0x58, 2);
+        fx.mem.write_u8(t + 0x67, 0);
+        let v = rmod(fx, t, f + 0x94, 0x1E);
+        fx.mem.setf(t + 0x34, ee::from_i32(-(v + 0xF)));
+        let v = rmod(fx, t, f + 0xC4, 0x1E);
+        fx.mem.setf(t + 0x30, ee::from_i32(v + 0x19));
+        let v = rmod(fx, t, f + 0xF0, 0xA);
+        fx.mem.setf(t + 0x38, ee::from_i32(v + 0xF));
+        let a = if fx.mem.i16(FACING) != 0 { 0x4000 } else { 0xC000 };
+        fx.mem.set32(t + 0x20, a);
+        node_at(fx, t, f + 0x158);
+        push_z(fx, t);
+    }
+    if fx.mem.i16(t + 0x54) < 4 {
+        fade_in(fx, t, 0x67, 0xC0, 0x60);
+    } else {
+        fade_out(fx, t, 0x67, 0xB, 9);
+    }
+    let h = ee::sub(fx.mem.f(t + 0x34), ee::mul(9.0, fx.mem.f(t + 0x38)));
+    fx.mem.setf(t + 0x34, h);
+    let r = ee::add(fx.mem.f(t + 0x4C), ee::mul(0.5, fx.mem.f(t + 0x30)));
+    fx.mem.setf(t + 0x4C, r);
+    age(fx, t);
+}
+
+/// 0x1E01D00 (D, task): the arc at node 1 (5 toward the facing): outer
+/// radius 30 growing by 10 below 100, inner blue (0x40, 0x40, 0xFF), outer
+/// white fading in by 0x60 under 0xC0 for 200 updates, out by 9; angles 10
+/// / 10; turned by the camera's angles (its first + 0x4000).
+fn arc(fx: &mut Fx, t: u32) {
+    let f = ARC;
+    if fx.mem.i16(t + 0x58) == 1 {
+        fx.mem.write_u32(t + 0x4C, 0x41F0_0000);
+        l2::rgb(fx, t + 0x64, 0xFF, 0xFF, 0xFF);
+        l2::rgb(fx, t + 0x60, 0x40, 0x40, 0xFF);
+        fx.mem.set16(t + 0x52, 0);
+        fx.mem.set16(t + 0x5A, 0xA);
+        fx.mem.set16(t + 0x5C, 0xA);
+        fx.mem.set16(t + 0x58, 2);
+        fx.mem.write_u8(t + 0x67, 0);
+    }
+    if fx.mem.i16(t + 0x54) < 0xC8 {
+        fade_in(fx, t, 0x67, 0xC0, 0x60);
+    } else {
+        fade_out(fx, t, 0x67, 0xB, 9);
+    }
+    node_at(fx, t, f + 0xDC);
+    let r = fx.mem.f(t + 0x4C);
+    if r < 100.0 {
+        fx.mem.setf(t + 0x4C, ee::add(r, 10.0));
+    }
+    camera_angles_saving(fx, t + 0x20, u64::from(t), u64::from(D), f + 0x11C);
+    let v = fx.mem.read_u32(t + 0x20).wrapping_add(0x4000);
+    fx.mem.write_u32(t + 0x20, v);
+    node_at(fx, t, f + 0x144);
+    push_z(fx, t);
+    age(fx, t);
+}
+
+/// 0x1E01EB0 (D, task): a grey ring of quads: size 6..20, cell row 0..2,
+/// radius 50..249, a random angle, +0xE 16..35, row 0..34, life 3..5; in by
+/// 0x40 under 0xC0, out by 14 (b646's 0x1E02340 shape).
+fn ring(fx: &mut Fx, t: u32) {
+    let f = RING;
+    if fx.mem.i16(t + 0x58) == 1 {
+        let v = rmod(fx, t, f + 0x24, 0xF);
+        fx.mem.setf(t + 0x48, ee::from_i32(v + 6));
+        let v = rmod(fx, t, f + 0x50, 3);
+        fx.mem.set16(t + 0x56, v);
+        l2::rgb(fx, t + 0x60, 0x80, 0x80, 0x80);
+        let v = rmod(fx, t, f + 0x7C, 0xC8);
+        fx.mem.set16(t + 0x50, v + 0x32);
+        let v = rmod(fx, t, f + 0x9C, 0x168);
+        fx.mem.set16(t + 0x5A, v);
+        let v = rmod(fx, t, f + 0xB8, 0x14);
+        fx.mem.set16(t + 0xE, v + 0x10);
+        let v = rmod(fx, t, f + 0xD8, 0x23);
+        fx.mem.set16(t + 8, v);
+        let v = rmod(fx, t, f + 0xF4, 3);
+        fx.mem.set16(t + 6, v + 3);
+        fx.mem.set16(t + 0x58, 2);
+    }
+    if fx.mem.i16(t + 0x54) < fx.mem.i16(t + 6) {
+        fade_in(fx, t, 0x63, 0xC0, 0x40);
+    } else {
+        fade_out(fx, t, 0x63, 0x10, 0xE);
+    }
+    age(fx, t);
+}
+
+/// 0x1E02040 (D, task): a tint's colours by its kind +0x50 (0 blue on
+/// black, 1 black on red, life 4; 2 grey, 22); both alphas in by 0x20
+/// under 0x80 while young, then out by 7 (the task ends when the first is
+/// below 9, the second is cleared).
+fn tint(fx: &mut Fx, t: u32) {
+    if fx.mem.i16(t + 0x58) == 1 {
+        let kinds: [([i32; 3], [i32; 3], i32); 3] = [([0, 0, 0x80], [0, 0, 0], 4), ([0, 0, 0], [0x80, 0, 0], 4), ([0x58, 0x58, 0x78], [0x58, 0x58, 0x78], 0x16)];
+        for (kind, (a, b, life)) in kinds.into_iter().enumerate() {
+            if fx.mem.i16(t + 0x50) == kind as i32 {
+                l2::rgb(fx, t + 0x60, a[0], a[1], a[2]);
+                l2::rgb(fx, t + 0x64, b[0], b[1], b[2]);
+                fx.mem.set16(t + 6, life);
+            }
+        }
+        fx.mem.set16(t + 0x58, 2);
+    }
+    if fx.mem.i16(t + 0x54) < fx.mem.i16(t + 6) {
+        for o in [0x63u32, 0x67] {
+            fade_in(fx, t, o, 0x80, 0x20);
+        }
+    } else {
+        fade_out(fx, t, 0x63, 9, 7);
+        let a = fx.mem.read_u8(t + 0x67);
+        fx.mem.write_u8(t + 0x67, if a >= 9 { a - 7 } else { 0 });
+    }
+    age(fx, t);
+}
+
+/// 0x1E021D0 (D, task): the stage light (0x1F7F10) down by 10 to 0x30 for
+/// 151 updates, back up by 10 to 0x80 once the timer is under 30; 0x80 and
+/// the task's end when the timer is at 3 (b757's 0x1E02BC0).
+fn light(fx: &mut Fx, t: u32) {
+    if fx.mem.i16(t + 0x58) == 1 {
+        fx.mem.set16(t + 0x50, 0x80);
+        fx.mem.set16(t + 0x58, 2);
+    }
+    if fx.mem.i16(t + 0x54) < 0x97 {
+        let l = fx.mem.i16(t + 0x50);
+        fx.mem.set16(t + 0x50, if l < 0x31 { 0x30 } else { l - 0xA });
+    } else if fx.mem.i32(TIMER) < 0x1E {
+        let l = fx.mem.i16(t + 0x50);
+        fx.mem.set16(t + 0x50, if l < 0x80 { l + 0xA } else { 0x80 });
+        if fx.mem.i16(t + 0x50) >= 0x81 {
+            fx.mem.set16(t + 0x50, 0x80);
+        }
+    }
+    age(fx, t);
+    if fx.mem.i32(TIMER) == 3 {
+        fx.set_stage_light(0x80);
+        fx.mem.set16(t + 0x58, 0);
+    } else {
+        let l = fx.mem.read_u8(t + 0x50);
+        fx.set_stage_light(i32::from(l));
+    }
+}
+
+/// 0x1E022E0(D, t): the flash's frame sprite (the target over the window,
+/// white, UVs inset by +8 / 10 and +0xA / 10 over 512) into the descriptor
+/// at +0xB228, no ordering table; alpha up by 9 below 0x80 for 200
+/// updates, then down by 7. `regs` the unit flash's s0 / s1 (the slot
+/// index, the live count).
+fn flash(fx: &mut Fx, t: u32, regs: [u32; 2]) {
+    let sp = fx.enter(0x40);
+    fx.saved(sp, &[(0x30, 0x01E0_2EFC), (0x20, u64::from(regs[1])), (0x10, u64::from(regs[0]))]);
+    // swc1 f20 / f21: the runner's (0) [H].
+    fx.mem.write_u32(sp, 0);
+    fx.mem.write_u32(sp + 4, 0);
+    let w = ee::div(ee::from_i32(fx.mem.i16(t + 8)), 10.0);
+    let h = ee::div(ee::from_i32(fx.mem.i16(t + 0xA)), 10.0);
+    if fx.mem.i16(t + 0x58) == 1 {
+        fx.mem.write_u8(t + 0x63, 0);
+        l2::rgb(fx, t + 0x60, 0xFF, 0xFF, 0xFF);
+        fx.mem.set16(t + 0x58, 2);
+    }
+    let d = fx.mem.read_u32(FLASH_DESC);
+    for k in 0..4u32 {
+        let b = fx.mem.read_u8(t + 0x60 + k);
+        fx.mem.write_u8(d + 0x10 + k, b);
+    }
+    fx.mem.write_u32(d + 0x14, 0x3F80_0000);
+    for (at, xy) in [(0x20u32, 0x6FF8u16), (0x30, 0x8FF8)] {
+        fx.mem.write_u16(d + at, xy);
+        fx.mem.write_u16(d + at + 2, xy);
+        let v = fx.mem.read_u64(d + at);
+        fx.mem.write_u64(d + at, (v & 0xFF00_0000_FFFF_FFFF) | 0x00FF_FFFF_0000_0000);
+        fx.mem.write_u8(d + at + 7, 0);
+    }
+    for (o, v) in [(0x18u32, ee::div(w, 512.0)), (0x1C, ee::div(h, 512.0)), (0x28, ee::div(ee::sub(512.0, w), 512.0)), (0x2C, ee::div(ee::sub(512.0, h), 512.0))] {
+        fx.mem.setf(d + o, v);
+    }
+    fx.submit(d, 0, 0);
+    if fx.mem.i16(t + 0x54) < 0xC8 {
+        fade_in(fx, t, 0x63, 0x80, 9);
+    } else {
+        fade_out(fx, t, 0x63, 9, 7);
+    }
+    age(fx, t);
+    fx.leave(0x40);
+}
+
+/// 0x1E02DF0(D) (d1cf0abc65df, b482's too): in a packet layer (0x2078A0)
+/// the attacker drawn into the target (0x1F8270 filter 0, its TEX0 / TEX1
+/// into the sprite descriptor at sp + 0x58; ALPHA 0x48), TEXFLUSH before
+/// and after; every flash task stepped (0x1E022E0); the layer linked into
+/// the ordering table at key 0 when any task was alive.
+fn unit_flash(fx: &mut Fx, a3: u32) {
+    let sp = fx.enter(0xB0);
+    let d = sp + 0x58;
+    fx.mem.write_u32(FLASH_DESC, d);
+    let layer = fx.layer_begin();
+    fx.mem.write_u32(LAYER, layer);
+    fx.mem.write_u16(d + 2, 0x26);
+    fx.mem.write_u16(d, 5);
+    fx.mem.write_u64(d + 8, 0x4_2421);
+    fx.mem.write_u32(d + 4, 0);
+    fx.texflush([5, d, 0x26, a3]);
+    fx.desc_alpha(d, 0x80_0000_0048);
+    let h = fx.self_handle();
+    let (_, regs) = fx.unit_draw(h, 0, sp + 0x98, sp + 0xA0);
+    fx.texflush(regs);
+    // s1 counts every live task (the `bne`'s delay slot).
+    let mut live = 0u32;
+    for k in 0..TASKS {
+        let t = D + 0x2A0 + 0x70 * k;
+        if fx.mem.i16(t + 0x58) == 0 {
+            continue;
+        }
+        live += 1;
+        if fx.mem.read_u32(t + 0x44) == FLASH {
+            flash(fx, t, [k, live]);
+        }
+    }
+    if live != 0 {
+        let layer = fx.mem.read_u32(LAYER);
+        fx.layer_end(layer, OT, 0);
+    }
+    fx.leave(0xB0);
+}

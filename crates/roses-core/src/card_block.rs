@@ -1,5 +1,5 @@
 //! The persistent per-side card block (private research
-//! `claude-end/DUEL-END.md` §2–3, functions 0x2147F0–0x2160B0).
+//! the project notes §2–3, functions 0x2147F0–0x2160B0).
 //!
 //! The original keeps one 0xFFA0-byte block per side at
 //! `BLK(s) = 0x2F2C10 + (s == byte[0x312B50] ? 0 : 0xFFA0)`; the block of
@@ -19,7 +19,7 @@
 //! and ids >= 854 are ignored (0x2152A0, 0x2154C0, 0x215570, 0x2157D0,
 //! 0x215F90, 0x215D10 all start with that check). Provenance: [F] read from
 //! the code, [emu] checked by running the game's code in the EE interpreter
-//! (`claude-end/run1.py`, `run2.py`, `run4.py`), [H] hypothesis.
+//! (the project notes, `run2.py`, `run4.py`), [H] hypothesis.
 
 use crate::duel::{next_rand31, recompute_rank, ExperienceChange, RANKED_CARDS, RANK_COUNT};
 use crate::CARD_COUNT;
@@ -738,7 +738,7 @@ mod tests {
         assert_eq!(serde_json::from_str::<CardBlock>(&json).unwrap(), b);
     }
 
-    /// The captured blocks of state 767 (`claude-end/dump_fixture.py`):
+    /// The captured blocks of state 767 (the project notes):
     /// `ROSES_TEST_END_FIXTURE` = the directory with blk0.bin / blk1.bin.
     #[test]
     #[ignore = "requires the private savestate dump; set ROSES_TEST_END_FIXTURE"]

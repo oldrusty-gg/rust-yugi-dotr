@@ -1,5 +1,5 @@
 //! Card activations as the original presents them
-//! (`claude-activate/ACTIVATION-PRESENTATION.md`) [F handlers, emu
+//! (the project notes) [F handlers, emu
 //! savestates 688-690 / 722-725 / 257 and the modules run in the
 //! interpreter]:
 //! - a trap (Block Attack, event 0x46, and the other traps' common part):

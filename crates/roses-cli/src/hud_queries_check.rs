@@ -1,6 +1,6 @@
 //! Private check: the duel-rule getters of `roses_core::duel::queries`
 //! against the values the game's own getters returned on savestates
-//! (`work/research/duel/claude-screen/hud/golden-getters/*.json`,
+//! (the project notes,
 //! produced by `tools/export_getters.py` in the EE interpreter).
 #[cfg(test)]
 mod tests {

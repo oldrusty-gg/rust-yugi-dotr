@@ -1,5 +1,5 @@
 //! Graverobber 688 (magic type 0x14, mode 3, filter 0x1E; builder arm
-//! 0x254A18 → 0x254B4C) (claude-effects/DARK-HOLE-BLOCKER-GRAVEROBBER.md).
+//! 0x254A18 → 0x254B4C) (the project notes).
 //! Synthetic cards with the originals' effect words; graveyard
 //! non-monsters use ids >= 0x2AB (the list filter 0x251920 reads the id).
 

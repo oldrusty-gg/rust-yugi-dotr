@@ -6,9 +6,9 @@
 //! quads named in `EVENTS`), so an import without what it needs is drawn as
 //! before.
 //!
-//! Sources (PAL SLES_515.79; private research `story/claude-story-red/
-//! BACKGROUNDS.md`, `claude-story-white/NOTES.md`, `claude-mako-map/NOTES.md`,
-//! `claude-story-motion/NOTES.md`; traces `trace-trigger/win/seto/manawyddan
+//! Sources (PAL SLES_515.79; private research `story/the project notes
+//! BACKGROUNDS.md`, the project notes, the project notes,
+//! the project notes; traces `trace-trigger/win/seto/manawyddan
 //! .json` (red) and `trace-brest/manawyddan.json` (white) made with
 //! `tools/trace_story.py` / `trace_white.py`; frame numbers below are theirs):
 //!
@@ -457,9 +457,9 @@ const EVENT_12150: EventMotion = EventMotion {
 /// The 3D world the original draws every frame under a map story event's
 /// 2D layers: the campaign map (W+53B5 = 0: 161..207 model draws in the red
 /// traces, 52/53 under Mako's pages) or the Stonehenge scene 0 (pack 33,
-/// W+53B5 1..3: 10 model draws) [emu `story/claude-story-red/trace-trigger
+/// W+53B5 1..3: 10 model draws) [emu `story/the project notes
 /// .json`, `trace-win3.json`, `trace-seto-cam.json`, `trace-man-cam.json`;
-/// `claude-story-white/trace-*.json`; `claude-map-behind/NOTES.md`]. Where the
+/// the project notes; the project notes]. Where the
 /// event draws a black fill or paintings over the whole screen (0x22EEEC,
 /// 0x22EDB4) or closes the letterbox, the world is drawn but covered; the
 /// frontend draws it all the same (map events never leave the map mode).
@@ -1729,7 +1729,7 @@ fn text_rows(layer: &Layer, alphas: [[u8; 4]; 3], dims: &dyn Fn(&str) -> Option<
 /// (clamped to 0x80) where the gate holds, the gates seeing this pass's
 /// values: TL of row 0 always, of row r when row r−1's TR ≥ 0x80; BL when
 /// TL ≥ 0x41; TR when BL ≥ 0x80; BR when TR ≥ 0x21. 1/2/3-line pages
-/// finish in 7/13/19 updates [F, emu claude-dialogue-phases].
+/// finish in 7/13/19 updates [F, emu the project notes].
 pub fn reveal_alphas(rows: usize, updates: u32) -> [[u8; 4]; 3] {
     let mut a = [[0u8; 4]; 3];
     let rows = rows.clamp(1, 3);

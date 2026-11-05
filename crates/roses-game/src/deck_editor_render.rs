@@ -189,6 +189,8 @@ fn tables(executable: &[u8], messages: &[u8]) -> Result<HudTables, String> {
     let mut codes = BTreeMap::new();
     let mut ids = HudTables::required_messages();
     ids.extend(roses_game::card_detail::message_ids());
+    // The message boxes (deck_editor_screen::message_box).
+    ids.extend([125, 151, 152]);
     ids.sort_unstable();
     ids.dedup();
     for chunk in ids.chunks(256) {
@@ -579,6 +581,12 @@ fn render_frame(runtime: &mut EditorRuntime) {
             }
         }
         runtime.textures.picture = texture;
+        let frame = roses_client::duel_hud::menu_frame(&runtime.tables, &runtime.yes_no, &calls);
+        skipped.extend(render_primitives(&frame.prims, &runtime.tables, &mut runtime.textures, &mut runtime.target));
+    }
+    // 0x1BBB90's state switch draws last [F 0x1BBE08].
+    let calls = deck_editor_screen::message_box_calls(snapshot.state, &runtime.tables, &runtime.pane, runtime.editor.frame() as u32);
+    if !calls.is_empty() {
         let frame = roses_client::duel_hud::menu_frame(&runtime.tables, &runtime.yes_no, &calls);
         skipped.extend(render_primitives(&frame.prims, &runtime.tables, &mut runtime.textures, &mut runtime.target));
     }

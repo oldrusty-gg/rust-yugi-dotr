@@ -1,5 +1,5 @@
 //! CMODULE c621, the monster-destroyed effect ("big light"), as traced in
-//! `claude-units/C621-DESTROY.md` [F/emu]: a fixed 180-update effect anchored
+//! the project notes [F/emu]: a fixed 180-update effect anchored
 //! at the loser's animated position taken at launch, projected each update
 //! through the live arena camera; everything additive (ALPHA 0x48), from
 //! TEXEFF record 15 or untextured, base colour (112, 176, 224).

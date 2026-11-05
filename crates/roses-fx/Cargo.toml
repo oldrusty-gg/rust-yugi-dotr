@@ -1,0 +1,11 @@
+[package]
+name = "roses-fx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Hand ports of the game's effect programs (CMODULE / BMODULE) in plain
+# Rust. No interpreter: the `roses-ee` runner is only their test oracle.
+[dependencies]
+roses-assets = { path = "../../crates/roses-assets" }

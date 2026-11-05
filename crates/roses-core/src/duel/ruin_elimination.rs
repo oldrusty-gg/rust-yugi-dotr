@@ -2,7 +2,7 @@
 //! handler 0x2671B0) and the "Elimination" magic cards of the type-4 / hi-0
 //! builder's default branch (Warrior Elimination 720 and kin; event 0x15,
 //! handler 0x25D770). Private notes and interpreter runs:
-//! `claude-effects/MANAWYDDAN-812-720-79.md` (emu WR0-WR6, E1-E3).
+//! the project notes (emu WR0-WR6, E1-E3).
 
 use super::*;
 

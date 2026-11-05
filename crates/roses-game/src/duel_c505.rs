@@ -1,6 +1,6 @@
 //! CMODULE c505 (0x1F9), Raigeki's lightning (event 5, handler 0x2593C0: one
 //! bolt per struck cell every 12 U; Anti-Raigeki: 10 on its own cell), as
-//! specified in `claude-activate/NEWLY-ALLOWED.md` section 10 [F code; emu:
+//! specified in the project notes section 10 [F code; emu:
 //! the reference model `tools/mf_c505_model.py` equals the interpreter's
 //! primitives to 0.0625 px in five runs]. The target is a CELL word: every
 //! node sits at the cell centre T = (50 (col - 3), 0, 50 (row - 3)) (height

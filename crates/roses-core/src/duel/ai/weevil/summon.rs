@@ -241,7 +241,7 @@ impl Hand {
     /// step 0x1D00F0 clears with `move $a0, $zero` at 0x1D33B8 (on every
     /// path to the 0x1CFF80 call at 0x1D3570; nothing after it writes a0's
     /// upper half while the side's +0x334 is 0, and only zeroes are stored
-    /// there). See `work/research/duel/claude-ai/TIE-0x120A20.md`.
+    /// there). See the project notes.
     /// [F static + emu tracker]
     fn get_in_child(&self, i: i32, parent_is_root: bool) -> R<i32> {
         if usize::try_from(i).is_ok_and(|i| i < self.0.len()) {

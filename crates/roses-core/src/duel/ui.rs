@@ -4,8 +4,8 @@
 //! graveyard pick after a magic activation), turning one press at a time
 //! into engine commands. Human pads and the computer's key queues
 //! ([`super::ai::keys`]) drive the same machine, as in the original, where
-//! 0x1CFF80 feeds either into it (research: `claude-rules/movement-
-//! verified.md`, `claude-effects/FUSION.md` §3, and the handlers at
+//! 0x1CFF80 feeds either into it (research: the project notes
+//! verified.md`, the project notes §3, and the handlers at
 //! 0x1D386C, 0x1D41F4, 0x1D6414, 0x1D6D70, 0x1D7230).
 //!
 //! Animation and wait states (0x13–0x17, 0x19, 0x1E, 0x36–0x3B, 0x3F–0x42,

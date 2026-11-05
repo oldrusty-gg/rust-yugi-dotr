@@ -1,7 +1,7 @@
 //! Harpie's Feather Duster (magic type 4, word1 >> 16 = 0x12, id 0x2BE) and
 //! the one trap that reads its event, Fake Trap (type 0x4B). Builder
 //! 0x254F3C, event 7 handler 0x25A080; private notes and interpreter runs in
-//! `claude-effects/TRAPS-0x23-0x31-FAKE-TRAP-FIELD.md` §3 (emu F0-F9).
+//! the project notes §3 (emu F0-F9).
 
 use super::*;
 

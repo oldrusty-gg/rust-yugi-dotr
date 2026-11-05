@@ -189,7 +189,7 @@ pub struct HudExtra {
     pub terrain_model_ready: bool,
     /// S+0x344 per side: the special-draw flag, 0 unless a side with the
     /// special draw fell below 1000 LP (never for the player at rank 1 or
-    /// for Weevil, controller 2; `claude-effects/SPECIAL-DRAW.md`).
+    /// for Weevil, controller 2; the project notes).
     pub summon_counters: [u8; 2],
     /// 0x1FB900(−1, −1) != 0: read only in state 0x30 (not modelled).
     pub legend_1fb900: bool,
@@ -197,6 +197,12 @@ pub struct HudExtra {
     /// object +0/+4); `None` when the object is absent. See
     /// [`settled_hand_positions`].
     pub hand_positions: Vec<Option<[f32; 2]>>,
+    /// Online (a port addition): the side this screen belongs to. The
+    /// original's 2-player duel has one shared screen, so the card box hides
+    /// a player's own cards too (Card Display HIDE needs R2, and d3c follows
+    /// the acting side). A seat with a screen of its own always reads the
+    /// cards it controls. `None` offline: the original's rule, unchanged.
+    pub own_side: Option<u8>,
 }
 
 impl Default for HudExtra {
@@ -208,6 +214,7 @@ impl Default for HudExtra {
             summon_counters: [0; 2],
             legend_1fb900: false,
             hand_positions: Vec::new(),
+            own_side: None,
         }
     }
 }
@@ -517,7 +524,7 @@ pub fn from_duel<C: CardData + ?Sized>(
     let mut field = BTreeMap::new();
     for u in &duel.units {
         field.insert(u.id, units.len());
-        units.push(field_unit(&q, u, d3c, cursor, rank, selected == Some(u.id)));
+        units.push(field_unit(&q, u, d3c, ui.extra.own_side, cursor, rank, selected == Some(u.id)));
     }
     let hand = &duel.sides[usize::from(active & 1)].hand;
     let first_hand = units.len();
@@ -548,7 +555,7 @@ pub fn from_duel<C: CardData + ?Sized>(
             flags2: 0xF5,
             controller: q.controller(active, slot),
             rank: rank(active, card),
-            face_down_hidden: q.hidden(r, d3c),
+            face_down_hidden: ui.extra.own_side != Some(active) && q.hidden(r, d3c),
             effect: q.has_effect(r),
             abilities: q.abilities(r, rank),
             legend_query: q.legend_query(r, d3c),
@@ -655,6 +662,7 @@ pub fn from_duel<C: CardData + ?Sized>(
         d67: ui.d67,
         flash: ui.flash,
         option_30: ui.extra.option_30,
+        own_side: ui.extra.own_side,
         units,
         board,
         terrain,
@@ -697,6 +705,7 @@ fn field_unit<C: CardData + ?Sized>(
     q: &Query<'_, C>,
     u: &DuelUnit,
     d3c: u8,
+    own_side: Option<u8>,
     cursor: GridPos,
     rank: &dyn Fn(u8, u16) -> i32,
     selected: bool,
@@ -730,7 +739,7 @@ fn field_unit<C: CardData + ?Sized>(
         flags2: u8::from(u.spellbind_fresh) << 3,
         controller: q.controller(u.side, u.slot),
         rank: rank(u.side, u.card),
-        face_down_hidden: q.hidden(r, d3c),
+        face_down_hidden: own_side != Some(q.controller(u.side, u.slot)) && q.hidden(r, d3c),
         effect: q.has_effect(r),
         abilities: q.abilities(r, rank),
         legend_query: q.legend_query(r, d3c),
@@ -925,6 +934,53 @@ mod tests {
         );
         assert_eq!((panel.shown, panel.rows, panel.slide), (1, [1, 0], 64));
         assert_eq!(record_kind(&cards, 671), None);
+    }
+
+    /// Who reads a face-down card's name in the card box. `Some(seat)` is an
+    /// online seat on its own screen; `None` keeps the original's rule.
+    #[test]
+    fn a_seat_reads_its_own_cards_and_offline_keeps_the_original_rule() {
+        let (mut duel, cards) = setup();
+        let own = duel.units.iter_mut().find(|u| u.id == UnitId(2)).unwrap();
+        (own.face_up, own.committed_face_up) = (false, false);
+        let rank = |_side: u8, _card: u16| 1;
+        // (side 0's face-down, side 1's face-down, the acting side's hand).
+        let hidden = |active: u8, ctx: &Context, own_side: Option<u8>| {
+            let mut duel = duel.clone();
+            duel.active = active;
+            let mut ui = ui(&duel);
+            ui.hand_records = true;
+            ui.extra.own_side = own_side;
+            let previous = HudUpdate { d3c: active, ..shown() };
+            let st = from_duel(&duel, &ui, &cards, ctx, &rank, &previous);
+            let (field, hand) = st.units.split_at(duel.units.len());
+            assert!(!hand.is_empty());
+            assert!(hand.iter().all(|h| h.face_down_hidden == hand[0].face_down_hidden));
+            (field[2].face_down_hidden, field[3].face_down_hidden, hand[0].face_down_hidden)
+        };
+        let pads = |option_29| Context {
+            option_28: 3,
+            option_29,
+            controllers: [100, 101],
+            ..Context::default()
+        };
+        // Online, Card Display HIDE on both seats, on either side's turn:
+        // own names shown, the other seat's face-down cards and hand not.
+        assert_eq!(hidden(0, &pads(1), Some(0)), (false, true, false));
+        assert_eq!(hidden(1, &pads(1), Some(0)), (false, true, true));
+        assert_eq!(hidden(1, &pads(2), Some(1)), (true, false, false));
+        assert_eq!(hidden(0, &pads(2), Some(1)), (true, false, true));
+        // A spectator owns nothing: everything face-down stays hidden.
+        assert_eq!(hidden(0, &pads(0), None), (true, true, true));
+        // Offline against the computer: unchanged. On the computer's turn
+        // the viewer d3c is the computer, so the player's own face-down card
+        // is hidden as in the original.
+        assert_eq!(hidden(0, &ctx(), None), (false, true, false));
+        assert!(hidden(1, &ctx(), None).0);
+        // Offline 2-player, one shared screen, HIDE: unchanged, own cards
+        // need R2 so the other player cannot read them.
+        let held = Context { r2_held: [true, false], ..pads(0) };
+        assert_eq!(hidden(0, &held, None), (false, true, false));
     }
 
     #[test]

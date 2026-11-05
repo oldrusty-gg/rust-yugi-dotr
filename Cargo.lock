@@ -525,17 +525,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "platform-video"
-version = "0.1.0"
-dependencies = [
- "png",
- "serde",
- "serde_json",
- "windows",
- "windows-core",
-]
-
-[[package]]
 name = "png"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -681,19 +670,14 @@ name = "roses-ee"
 version = "0.1.0"
 dependencies = [
  "roses-assets",
+ "roses-fx",
 ]
 
 [[package]]
-name = "roses-launcher"
+name = "roses-fx"
 version = "0.1.0"
 dependencies = [
- "platform-net",
- "platform-sdk",
- "platform-video",
- "png",
- "serde",
- "serde_json",
- "windows-sys 0.61.2",
+ "roses-assets",
 ]
 
 [[package]]

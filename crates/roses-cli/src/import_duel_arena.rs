@@ -8,7 +8,7 @@
 //! terrain * 0xC0) as raw words. Records the grammar does not cover are
 //! listed, never guessed. Nothing here may be distributed.
 //!
-//! Traced in `work/research/duel/claude-units/ARENA-SCOPE.md`: the
+//! Traced in the project notes: the
 //! battle state 0x39 phase 2 loads 0x1E91B0(1, 0) (block 22) and
 //! 0x1E91B0(2, terrain) (block 23 + terrain); the terrain is the battle
 //! cell's.
@@ -23,8 +23,8 @@ use std::path::Path;
 pub const SCHEMA: &str = "roses-duel-arena-import-1";
 const MODEL_ISO_PATH: &str = "DATA/MODEL.MRG";
 const STAGECAM_ISO_PATH: &str = "DATA/STAGECAM.MRG";
-/// The attack effect programs (one 0x8000 record per card) and the
-/// executable they run against (the port's EE interpreter, `roses-ee`).
+/// The attack effect programs (one 0x8000 record per card); with the
+/// executable, data for the hand ports (`roses-fx`): no original code runs.
 const BMODULE_ISO_PATH: &str = "DATA/BMODULE.MRG";
 /// The card / duel effect programs (type-0 tasks; the duel start's leader
 /// appearance c620 is run from it).
@@ -241,8 +241,6 @@ pub fn run(iso: &Path, output: &Path) -> Result<()> {
             "unit_tables": {"size": {"ee": UNIT_SIZE_EE, "values": unit_sizes}, "flags": {"ee": UNIT_FLAGS_EE, "values": unit_flags}},
             "texture_encoding": "16-bit CLUT: PNG RGB = GS expansion (5-bit value << 3), PNG alpha 255 = CLUT alpha bit; 32-bit CLUT: RGB bytes as stored, PNG alpha = GS alpha * 255 / 128",
             "not_included": [
-                "the attack effects' drawing (BMODULE.MRG and the executable are copied; the port runs them headless for their timing)",
-                "the destroy effect (CMODULE c621)",
                 "the environment records' meaning (raw words only)",
                 "stage records the RH0 grammar does not cover (listed per block)"
             ],

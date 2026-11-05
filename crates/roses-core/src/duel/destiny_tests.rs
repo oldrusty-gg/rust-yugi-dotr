@@ -1,5 +1,5 @@
 //! The Destiny Draw for every side (`duel/destiny.rs`,
-//! claude-effects/SPECIAL-DRAW.md §2–4, next/ABILITY-3-CPU.md). Synthetic
+//! the project notes §2–4, next/ABILITY-3-CPU.md). Synthetic
 //! cards; the rows are made-up ids (the real ones come from the executable).
 
 use super::script::destiny::{pick, DestinyRows, DESTINY_USED};

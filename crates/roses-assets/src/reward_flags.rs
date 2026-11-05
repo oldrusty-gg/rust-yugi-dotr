@@ -1,7 +1,7 @@
 //! Reward-reel card flags from the PAL executable's card table.
 //!
 //! The reward slot machine (mode 0xF, private research
-//! `claude-end/DUEL-END.md` §3) reads two bits of byte 0xB of each 20-byte
+//! the project notes §3) reads two bits of byte 0xB of each 20-byte
 //! card record at EE 0x2BE400 (`CARD_TABLE_EE_ADDRESS`, record pointer
 //! 0x1DE350):
 //! - bit 5: the card may appear on a reel (0x252980 removes every graveyard

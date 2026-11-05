@@ -3,7 +3,7 @@
 //! All labels, names, glyphs and icon tables come from the user's files.
 //! This does not implement the separate 3D card-stack drawer 0x229EF0 or
 //! the slide animation. Private draw-contract evidence is under
-//! `work/research/story/codex-deck-panel/` (the EE128 probe).
+//! the project notes (the EE128 probe).
 
 use crate::import_story::{frame_layers, import_png, message_image, raw_rect, story_layer};
 use crate::Result;

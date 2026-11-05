@@ -1289,7 +1289,7 @@ mod tests {
     #[test]
     #[ignore = "Requires the user's executable (ROSES_TEST_ELF_PATH); slow in debug"]
     fn private_computer_sessions_play_route_3_5_decks_or_refuse() {
-        // The red route after Pegasus (claude-effects/next/ROUTE-3-5.md): the
+        // The red route after Pegasus (the project notes): the
         // player's starter deck against the Labyrinth-ruler (0x22, opponent
         // 8), Keith (0x1E, 4) and Darkness-ruler (0x21, 7) decks. Their
         // controllers are not ported: Weevil's module stands in on seat 1 as

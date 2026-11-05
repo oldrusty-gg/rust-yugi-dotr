@@ -1,6 +1,6 @@
 //! The map editor (mode 0xD, Custom Duel's Edit Map) as a Bevy-free model
 //! (Claude, 7 Oct 2026). Notes, disassembly and interpreter / PCSX2 runs:
-//! `work/research/modes/map-editor/NOTES.md`.
+//! the project notes.
 //!
 //! Entry [F 0x1C7974..0x1C7A30, emu]: Custom Duel's Edit Map row on Cross
 //! copies own map (0xA9C08C + 2) % 0xA9C08D of the pad side's card block

@@ -1,6 +1,6 @@
 //! Unit-record fields that duel effects rewrite, so that later readers see
 //! the record and not the card table (FLIP-112-POWERUPS-789-791.md under
-//! `claude-effects/`):
+//! the project notes):
 //!
 //! - +0x3E kind byte and +0x3F attribute: flip types 0x36 / 0x37 (0x265250
 //!   at 0x266270, event 0x42 → 0x26F220 → 0x1E19E0 / 0x1E1B10). Every

@@ -521,6 +521,38 @@ pub fn add_board_faces(input: &mut OverlayInput, session: &DuelSession, cards: &
     }
 }
 
+/// The first `Battle` of `events` as the attack effects' outcome boundary
+/// 0x1F8100 reads it: `before` is the duel before the step. Both units'
+/// `Query::stats` at the defender's cell, with the values the step fought
+/// with in place of the attacker's ATK and the defender's stat: they already
+/// hold what the step changed before the battle (Mirror Wall, a flip effect,
+/// the pre-pass) [H: the original's records hold those by the scene].
+fn effect_battle(
+    before: &Duel,
+    events: &[roses_core::duel::DuelEvent],
+    cards: &Catalogue,
+    ctx: &Context,
+) -> Option<roses_fx::types::BattleState> {
+    use roses_core::duel::queries::{Query, Record};
+    let (attacker, defender, attack, defend, defence) = events.iter().find_map(|e| match e {
+        roses_core::duel::DuelEvent::Battle { attacker, defender, attack, defend, defence } => {
+            Some((*attacker, *defender, i32::from(*attack), i32::from(*defend), *defence))
+        }
+        _ => None,
+    })?;
+    let (a, d) = (before.unit(attacker)?, before.unit(defender)?);
+    let q = Query::new(before, cards, ctx);
+    let stats = |u| q.stats(Record::Field(u), d.position);
+    let (sa, sd) = (stats(a)?, stats(d)?);
+    let unit = |attack, defence, defence_position| roses_fx::types::BattleUnit { attack, defence, defence_position };
+    let (d_attack, d_defence) = if defence { (sd.attack, defend) } else { (defend, sd.defence) };
+    Some(crate::duel_bmodule::battle_state(
+        [unit(attack, sa.defence, a.defence), unit(d_attack, d_defence, defence)],
+        a.side == before.active,
+        (d.position.column, d.position.row),
+    ))
+}
+
 /// Face-up card images still without values (`face: None`) take them from
 /// `duel`, the state before the presented step: a unit a monster effect
 /// reveals can be gone from the live duel already (Mushroom Man revealed by
@@ -621,7 +653,7 @@ pub struct DuelPlay {
     /// d63 (0x2DB903): 0x3C when state 0x18's cursor handler takes a
     /// direction (a step, or a press at the edge), -1 per update (0x1D0970),
     /// 0 when Cross picks a card or a unit there (0x1D3A60 / 0x1D3B74) [F;
-    /// interpreter `claude-padfeel/d63_dpad.py` on session 000-start].
+    /// interpreter the project notes on session 000-start].
     pub d63: u8,
     /// d63 was set at this update's start: the cursor glow's word 0x2DB826
     /// steps rising (0x1D081C, before the decrement and the handler).
@@ -804,6 +836,8 @@ pub struct BattleIntro {
     /// The arena's terrain: the defender's cell's (the battle cell, cell
     /// table +0x16 through 0x1E3530 [H: which unit's cell]).
     pub arena_terrain: u8,
+    /// What the attack effects' outcome boundary reads (`effect_battle`).
+    pub effect_battle: Option<roses_fx::types::BattleState>,
     /// The update the arena ends on (set when it starts, extended by the
     /// attack phase's length when that starts).
     pub arena_end: Option<u32>,
@@ -879,6 +913,7 @@ type DeferredBattle = (
     OverlayInput,
     Vec<(roses_core::UnitId, (u8, u8), GridPos)>,
     Vec<(roses_core::UnitId, (u16, u8, i32, i32), bool)>,
+    Option<roses_fx::types::BattleState>,
 );
 
 impl BattleIntro {
@@ -1889,16 +1924,11 @@ impl DuelPlay {
 
     /// The small note an online duel shows over the HUD (a port addition):
     /// SPECTATING for a spectator (with how many watch), "N WATCHING" for a
-    /// player while anyone watches; none otherwise and offline.
+    /// player while anyone watches; none otherwise and offline. While the
+    /// duel waits for a seat the note says so: the board just stands still.
     pub fn online_note(&self) -> Option<String> {
         let link = self.online.as_ref()?;
-        let n = link.watchers();
-        match (link.spectator, n) {
-            (true, n) if n > 1 => Some(format!("SPECTATING  {n} WATCHING")),
-            (true, _) => Some("SPECTATING".into()),
-            (false, 0) => None,
-            (false, n) => Some(format!("{n} WATCHING")),
-        }
+        online_note_text(link.spectator, link.watchers(), link.away_note())
     }
 
     /// Online, before a scripted press (replays, captures): run updates
@@ -3983,6 +4013,7 @@ impl DuelPlay {
         before: OverlayInput,
         positions: &[(roses_core::UnitId, (u8, u8), GridPos)],
         faces: &[(roses_core::UnitId, (u16, u8, i32, i32), bool)],
+        fight: Option<roses_fx::types::BattleState>,
     ) {
         let trap_first = self.activation.as_ref().is_some_and(|a| a.t == 0 && a.plan.is_some())
             || self.deferred_activation.as_ref().is_some_and(|d| d.0.as_slice() == events);
@@ -4003,7 +4034,7 @@ impl DuelPlay {
                     }
                 }
             }
-            self.deferred_battle = Some((events.to_vec(), before, positions.to_vec(), faces));
+            self.deferred_battle = Some((events.to_vec(), before, positions.to_vec(), faces, fight));
             return;
         }
         for event in events {
@@ -4131,6 +4162,7 @@ impl DuelPlay {
                 revealed,
                 damage,
                 destroyed,
+                effect_battle: fight,
                 arena_terrain: self
                     .session
                     .duel
@@ -4304,9 +4336,10 @@ impl DuelPlay {
             return None;
         }
         // Watching: Start leaves; a match that may no longer be watched ends
-        // the watch.
-        if let Some(link) = self.online.as_ref().filter(|l| l.spectator) {
-            if presses & pad::START != 0 {
+        // the watch, and a seat whose match is gone (the server restarted, or
+        // cannot be reached) goes back to the menu.
+        if let Some(link) = self.online.as_ref() {
+            if link.spectator && presses & pad::START != 0 {
                 self.halted = Some(crate::duel_online::STOPPED_WATCHING.into());
                 return None;
             }
@@ -4539,11 +4572,13 @@ impl DuelPlay {
                                 if shot.battle.is_none() {
                                     let mut cards = [cards[0].2 .0, cards[1].2 .0];
                                     let mut destroyed = intro.destroyed;
+                                    let mut fight = intro.effect_battle;
                                     // Research: `ROSES_ARENA_FORCE=attacker,defender,destroyed`
                                     // plays another pair of monsters in the arena (captures).
                                     if let Some(f) = crate::duel_bmodule::forced_battle() {
                                         cards = [f.0, f.1];
                                         destroyed = f.2;
+                                        fight = None;
                                     }
                                     eprintln!("Duel arena: attack phase of cards {cards:?} starts at frame {}", self.frames);
                                     match (provider.setup)(shot.terrain, cards) {
@@ -4563,7 +4598,10 @@ impl DuelPlay {
                                             // The attack effects, run live one update ahead.
                                             self.arena_effects = (provider.effect_inputs)(cards, self.data.texeff.as_deref())
                                                 .filter(|_| std::env::var_os("ROSES_BMODULE_OFF").is_none())
-                                                .map(|inputs| crate::duel_bmodule::EffectWorker::start(&battle, inputs));
+                                                .map(|mut inputs| {
+                                                    inputs.battle = fight;
+                                                    crate::duel_bmodule::EffectWorker::start(&battle, inputs)
+                                                });
                                             // Phase 2 loads both monsters' sound groups
                                             // (0x1E64E0 -> 0x216D20(2 / 3, card)) [F].
                                             self.audio.push(crate::duel_audio::AudioCue::Group { slot: 2, card: cards[0] });
@@ -4695,7 +4733,7 @@ impl DuelPlay {
             }
             if m.done() {
                 self.monster_fx = None;
-                if let Some((events, before, positions, mut faces)) = self.deferred_battle.take() {
+                if let Some((events, before, positions, mut faces, fight)) = self.deferred_battle.take() {
                     // The scene shows the units as the effect left them
                     // (Hoshiningen's +300 in the versus cards) [F order].
                     let live = self.unit_faces();
@@ -4704,7 +4742,7 @@ impl DuelPlay {
                             *f = *l;
                         }
                     }
-                    self.start_intro(&events, before, &positions, &faces);
+                    self.start_intro(&events, before, &positions, &faces, fight);
                 }
             }
             return Some(Frame::default());
@@ -4779,8 +4817,8 @@ impl DuelPlay {
                 self.monster_fx = self.after_activation.take();
                 // Mirror Wall's battle goes on with the halved attacker.
                 if self.monster_fx.is_none() {
-                    if let Some((events, before, positions, faces)) = self.deferred_battle.take() {
-                        self.start_intro(&events, before, &positions, &faces);
+                    if let Some((events, before, positions, faces, fight)) = self.deferred_battle.take() {
+                        self.start_intro(&events, before, &positions, &faces, fight);
                     }
                 }
             }
@@ -4917,6 +4955,7 @@ impl DuelPlay {
         } = b;
         let terrain_before = duel_before.terrain.clone();
         if let Ok(frame) = &result {
+            let fight = effect_battle(&duel_before, &frame.events, &self.data.catalogue, &self.hud_context());
             self.start_walk(&frame.events, selection);
             self.start_heart(&frame.events, &before, &positions, &duel_before);
             self.start_crush(&frame.events, &before, &positions, &duel_before);
@@ -4942,7 +4981,7 @@ impl DuelPlay {
                 self.terrain_logged = true;
                 eprintln!("Duel play: unsupported, not presented: a terrain change outside field magic (the board tiles switch at once)");
             }
-            self.start_intro(&frame.events, before, &positions, &faces);
+            self.start_intro(&frame.events, before, &positions, &faces, fight);
             self.start_hand(&mode_before, side);
             self.start_summon(&mode_before, &frame.events, &hand_before, field_chain);
             self.start_exodia(&frame.events);
@@ -5282,15 +5321,27 @@ impl DuelPlay {
         Some((0..duel.side_count()).filter(|&s| s == me || duel.team_mates(me, s)).fold(0, |b, s| b | 1 << s))
     }
 
+    /// The side of a 2-seat online duel this screen belongs to
+    /// ([`roses_client::duel_hud::HudExtra::own_side`]). None offline and
+    /// for a spectator.
+    pub fn hud_own_side(&self) -> Option<u8> {
+        self.online.as_ref().filter(|l| !l.spectator).map(|l| l.seat & 1)
+    }
+
     fn hud_context_2p(&self) -> Context {
         if let Some(link) = self.online.as_ref() {
             // Online: the original's 2-player duel (pad 1 = seat 0, pad 2 =
             // seat 1) with the match's Leader Ability / Card Display words;
             // only this seat's pad is here, so only its R2 is read (the
             // other seat's R2 never reveals anything: its hidden cards are
-            // not sent).
+            // not sent). HIDE exists because the original's two players
+            // share a screen; this screen is the seat's own, so its own side
+            // counts as OPEN here (a port addition, as `multi_own_sides`).
             let seat = usize::from(link.seat & 1);
-            let [option_28, option_29] = link.options().words();
+            let [option_28, mut option_29] = link.options().words();
+            if !link.spectator {
+                option_29 |= 1 << seat;
+            }
             let pad = roses_core::duel::PAD_CONTROLLER;
             let mut r2_held = [false; 2];
             // A spectator has no cards of its own to show.
@@ -5298,6 +5349,21 @@ impl DuelPlay {
             return Context { option_28, option_29, controllers: [pad, pad + 1], control_changed: Vec::new(), r2_held };
         }
         hud_context_with(&self.session, self.data.first_duel.options, self.held_pads)
+    }
+}
+
+/// [`DuelPlay::online_note`]'s lines (two spaces split them).
+pub fn online_note_text(spectator: bool, watchers: u16, away: Option<&str>) -> Option<String> {
+    let line = match (spectator, watchers) {
+        (true, n) if n > 1 => Some(format!("SPECTATING  {n} WATCHING")),
+        (true, _) => Some("SPECTATING".into()),
+        (false, 0) => None,
+        (false, n) => Some(format!("{n} WATCHING")),
+    };
+    match (away, line) {
+        (Some(a), Some(l)) => Some(format!("{a}  {l}")),
+        (Some(a), None) => Some(a.into()),
+        (None, l) => l,
     }
 }
 
@@ -5971,6 +6037,12 @@ impl DuelHud {
                 ctx.option_29 = u32::from(own & (1 << pair[0]) != 0);
             }
         }
+        ui.extra.own_side = play.hud_own_side();
+        #[cfg(feature = "online")]
+        if let Some((pair, _, _)) = &multi_view {
+            // The projected left side (0) when this screen owns it.
+            ui.extra.own_side = play.multi_own_sides().filter(|own| own & (1 << pair[0]) != 0).map(|_| 0);
+        }
         let (leaders, ranks) = (self.leaders, self.ranks);
         let rank = move |side: u8, card: u16| first_duel_rank(leaders, ranks, side, card);
         let mut state = duel_hud::from_duel(
@@ -6006,7 +6078,10 @@ impl DuelHud {
                 state.sides[i].monsters = crate::duel_multi::count_units(real, s, 1..=5);
                 state.sides[i].magic_traps = crate::duel_multi::count_units(real, s, 6..=10);
             }
-            let mut notes: Vec<Vec<u8>> = crate::duel_multi::turn_lines(real, m.seat, &m.names).into_iter().map(String::into_bytes).collect();
+            // While the Exodia event takes over no turn note slides out with
+            // the HUD (the outcome is the event's to show).
+            let turn = if play.exodia.is_some() { Vec::new() } else { crate::duel_multi::turn_lines(real, m.seat, &m.names) };
+            let mut notes: Vec<Vec<u8>> = turn.into_iter().map(String::into_bytes).collect();
             notes.append(&mut state.notes);
             state.notes = notes;
         }
@@ -6023,7 +6098,10 @@ impl DuelHud {
         let mut frame = duel_hud::frame(&state, &self.tables);
         #[cfg(feature = "online")]
         if let Some((pair, _, _)) = &multi_view {
-            self.multi_overlay(play, &mut frame, *pair);
+            // The HUD is drawn unless 0x1AF0A0's D67 bit 1 is set or it has
+            // slid fully out (D3E 128): the plates go with it.
+            let hud_shown = state.d67 & 2 == 0 && frame.next.d3e < 128;
+            self.multi_overlay(play, &mut frame, *pair, hud_shown);
         }
         // L1's settings panel: 0x27 opens overlay slot 0 kind 7 (the OPTION
         // panel, as the map's SYSTEM icon 2) with C9C = 0x200 and 0x28
@@ -6214,7 +6292,10 @@ impl DuelHud {
     /// lit on that player's turn, OUT once knocked out), and the placing
     /// list once the match is over.
     #[cfg(feature = "online")]
-    fn multi_overlay(&mut self, play: &DuelPlay, frame: &mut HudFrame, pair: [u8; 2]) {
+    /// `hud_shown`: the 2-player HUD is on screen this frame; the compact
+    /// plates and the plate labels are hidden with it (battle approach,
+    /// Exodia event), and the knockout note during the Exodia event.
+    fn multi_overlay(&mut self, play: &DuelPlay, frame: &mut HudFrame, pair: [u8; 2], hud_shown: bool) {
         use roses_client::duel_hud::MenuCall;
         let (Some(m), Some(yes_no)) = (play.multi.as_ref(), self.yes_no.clone()) else { return };
         let duel = &play.session.duel;
@@ -6228,9 +6309,10 @@ impl DuelHud {
         // name, with the same frame pieces (panel type 4); the LP line
         // beside it.
         let pw = crate::duel_multi::PLATE_PORTRAIT;
-        let tx = 20 + pw + 6;
+        let tx = crate::duel_multi::PLATE_TEXT_X;
         let mut used = [0; 2];
-        for p in crate::duel_multi::compact_plates(duel, me, pair, &m.names) {
+        let plates = crate::duel_multi::plates_shown(hud_shown, play.exodia.is_some());
+        for p in crate::duel_multi::compact_plates(duel, me, pair, &m.names).into_iter().filter(|_| plates) {
             let column = usize::from(p.place != crate::duel_multi::Place::Left);
             let x = if column == 0 { 6 } else { 512 - 6 - w };
             let y = 108 + used[column] * (h + 4);
@@ -6239,8 +6321,9 @@ impl DuelHud {
             let (px, py) = (x + 20, y + 25);
             calls.push(MenuCall::Portrait { slot: 2 + p.side, x: px, y: py, w: pw, h: pw, bright: p.active && !p.out });
             calls.push(MenuCall::Panel { grad: -1, deco: -1, ptype: 4, x: px, y: py, wu: -pw, hu: -pw, bright: p.active && !p.out });
-            let name = format!("{} {}", crate::duel_multi::SEAT_LETTERS[usize::from(p.side) & 3], p.name);
-            self.multi_text(&mut calls, &mut id, &name, x + 16, y + 4, w - 24, p.out);
+            let name = crate::duel_multi::plate_title(p.side, &p.name);
+            let text_w = crate::duel_multi::PLATE_TEXT_W;
+            self.multi_text(&mut calls, &mut id, &name, x + tx, y + crate::duel_multi::PLATE_NAME_Y, text_w, p.out);
             let status = if p.out {
                 "OUT"
             } else if p.active {
@@ -6251,21 +6334,22 @@ impl DuelHud {
                 ""
             };
             let line = format!("LP {} {status}", p.lp);
-            self.multi_text(&mut calls, &mut id, &line, x + tx, y + 25, w - tx - 2, p.out || !p.active);
+            self.multi_text(&mut calls, &mut id, &line, x + tx, y + crate::duel_multi::PLATE_LP_Y, text_w, p.out || !p.active);
         }
         // A knockout just happened: "<NAME> OUT" over the board.
-        if let Some((side, _)) = m.out_note.filter(|_| duel.outcome.is_none() || play.animating()) {
+        let note = crate::duel_multi::out_note_shown(duel.outcome.is_some(), play.animating(), play.exodia.is_some(), play.scene_hides_hud());
+        if let Some((side, _)) = m.out_note.filter(|_| note) {
             let text = crate::duel_multi::out_note(&m.name(side));
             calls.push(MenuCall::Gold { x: 256, y: 176, size: 2, flags: 3, text, dim: false });
         }
         // A knocked-out player on the LP plates: OUT.
-        for (i, &s) in pair.iter().enumerate() {
+        for (i, &s) in pair.iter().enumerate().filter(|_| plates) {
             if duel.is_out(s) {
                 calls.push(MenuCall::Gold { x: if i == 0 { 0x60 } else { 0x1A0 }, y: 0x5E, size: 1, flags: 3, text: b"OUT".to_vec(), dim: false });
             }
         }
         // This seat's target on the right LP plate.
-        if let Some(seat) = m.seat.filter(|&s| duel.alive(s) && duel.outcome.is_none()) {
+        if let Some(seat) = m.seat.filter(|&s| plates && duel.alive(s) && duel.outcome.is_none()) {
             if crate::duel_multi::target_of(duel, seat) == pair[1] && pair[1] != duel.active {
                 calls.push(MenuCall::Gold { x: 0x1A0, y: 0x5E, size: 1, flags: 3, text: b"TARGET".to_vec(), dim: false });
             }
@@ -6928,6 +7012,80 @@ mod tests {
         };
         let (duel, _) = Duel::new(setup, &cards).unwrap();
         (DuelSession::new(duel, [None, None]), cards)
+    }
+
+    /// A real engine battle of (attack, defence) monsters at (3,4) -> (3,3):
+    /// the state the effects get, what 0x1F8100 answers for the attacker's
+    /// effect (0x101) and the defender's counter (0x001), and whether the
+    /// engine destroyed the target.
+    fn outcome_of(attacker: (u16, u16), defender: (u16, u16), defence: bool) -> (roses_fx::types::BattleState, i32, i32, bool) {
+        use roses_core::duel::{CardInfo, DuelCommand, kind, terrain};
+        use roses_core::UnitId;
+        let monster = |id: u16, (attack, defense): (u16, u16)| CardInfo {
+            id,
+            kind: kind::MACHINE,
+            level: 1,
+            attribute: 0,
+            attack,
+            defense,
+            effects: [false; 5],
+            toon: false,
+            kind_index: 0,
+            entries: [None; 5],
+            equip_bits: [0; 7],
+            power_up: None,
+        };
+        let cards = Catalogue::new(vec![monster(0, (100, 100)), monster(1, (100, 100)), monster(2, attacker), monster(3, defender)], []);
+        let setup = DuelSetup {
+            terrain: vec![terrain::NORMAL; 49],
+            leaders: [0, 1],
+            decks: [vec![], vec![]],
+            first: 0,
+            leader_abilities: [vec![], vec![]],
+            controllers: [roses_core::duel::PAD_CONTROLLER; 2],
+        };
+        let (mut duel, _) = Duel::new(setup, &cards).unwrap();
+        let mut place = |id, card, side, row, defence, acted| {
+            let mut u = duel.units[0].clone();
+            (u.id, u.card, u.side, u.slot, u.position) = (UnitId(id), card, side, 1, GridPos { column: 3, row });
+            (u.face_up, u.committed_face_up, u.defence, u.committed_defence, u.acted) = (true, true, defence, defence, acted);
+            duel.units.push(u);
+        };
+        place(90, 2, 0, 4, false, false);
+        place(91, 3, 1, 3, defence, true);
+        let command = DuelCommand::Move { unit: UnitId(90), path: vec![GridPos { column: 3, row: 3 }], face_up: false, defence: None };
+        let (after, events) = duel.apply(0, &command, &cards).unwrap();
+        let state = effect_battle(&duel, &events, &cards, &Context::default()).expect("a battle");
+        (state, state.outcome(0x101, 0x001), state.outcome(0x001, 0x101), after.unit(UnitId(91)).is_none())
+    }
+
+    #[test]
+    fn a_waiting_duel_says_why_it_stands_still() {
+        assert_eq!(online_note_text(false, 0, None), None);
+        assert_eq!(online_note_text(false, 2, None).as_deref(), Some("2 WATCHING"));
+        assert_eq!(online_note_text(true, 1, None).as_deref(), Some("SPECTATING"));
+        assert_eq!(online_note_text(false, 0, Some("OPPONENT AWAY")).as_deref(), Some("OPPONENT AWAY"));
+        assert_eq!(online_note_text(false, 1, Some("RECONNECTING")).as_deref(), Some("RECONNECTING  1 WATCHING"));
+    }
+
+    #[test]
+    fn a_real_battle_gives_the_effects_its_answer() {
+        // The target survives: its DEF holds, or it wins.
+        let (state, own, _, gone) = outcome_of((1000, 500), (800, 1500), true);
+        assert_eq!((own, gone), (0, false));
+        assert_eq!(state.cell, (3, 3));
+        assert_eq!(state.units[1].map(|u| (u.defence, u.defence_position)), Some((1500, true)));
+        let (_, own, counter, gone) = outcome_of((1000, 500), (1800, 900), false);
+        assert_eq!((own, counter, gone), (0, 1, false));
+        // The target is destroyed.
+        let (_, own, _, gone) = outcome_of((2000, 500), (800, 1500), true);
+        assert_eq!((own, gone), (1, true));
+        let (state, own, counter, gone) = outcome_of((2000, 500), (1800, 900), false);
+        assert_eq!((own, counter, gone), (1, 0, true));
+        assert_eq!(state.active_side, 1);
+        // No battle in the step: nothing for the effects.
+        let (session, cards) = synthetic_session();
+        assert_eq!(effect_battle(&session.duel, &[], &cards, &Context::default()), None);
     }
 
     fn press(session: &mut DuelSession, cards: &Catalogue, keys: u16) -> Response {
@@ -7862,6 +8020,36 @@ mod tests {
         }
     }
 
+    /// N-player plates on the real art (`ROSES_DUEL_IMPORT`): with
+    /// `ROSES_HUD_NAMES_OUT` the frame is written there as a PNG (over black).
+    #[test]
+    fn private_compact_plates_draw_their_names_with_long_ones_shortened() {
+        let Some(dir) = private_import() else { return };
+        let data = load(&dir).unwrap();
+        let (_, decks) = crate::duel_multi::preview_seats(&data, 4);
+        let duel = crate::duel_multi::preview_duel(data.first_duel.terrain.clone(), &decks, roses_core::duel::MultiMode::Teams, 1, &data.catalogue).unwrap();
+        let names = vec!["Christopher1".to_string(), "Pegasus Crawford".to_string(), String::new(), "Mai Valentine".to_string()];
+        let mut play = DuelPlay::multi_preview(data, duel, Some(0), names, 1_000_000).unwrap();
+        let mut hud = DuelHud::new(&play).unwrap();
+        for _ in 0..200 {
+            play.update(0);
+            hud.update(&play);
+        }
+        hud.render();
+        if let Some(out) = std::env::var_os("ROSES_HUD_NAMES_OUT").map(std::path::PathBuf::from) {
+            std::fs::create_dir_all(&out).unwrap();
+            let rgba: Vec<u8> = hud.layer.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2], 255]).collect();
+            let image = bevy::image::Image::new(
+                bevy::render::render_resource::Extent3d { width: HUD_SIZE as u32, height: HUD_SIZE as u32, depth_or_array_layers: 1 },
+                bevy::render::render_resource::TextureDimension::D2,
+                rgba,
+                bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+                bevy::asset::RenderAssetUsages::MAIN_WORLD,
+            );
+            image.try_into_dynamic().unwrap().save(out.join("hud-compact-plates.png")).unwrap();
+        }
+    }
+
     #[test]
     fn event_0x36_init_camera_is_0x262630() {
         // Cell target, polar (180, 112.5 deg / side 1 292.5 deg, 33.75 deg).
@@ -7917,6 +8105,7 @@ mod tests {
             versus: None,
             damage: (0, 0),
             destroyed: 0,
+            effect_battle: None,
             arena_terrain: 0,
             arena_end: None,
             leader: false,

@@ -1,7 +1,7 @@
 //! The battle's attack effects (BMODULE.MRG) run headless: the return code
 //! of every call, which drives the battle (contact, hit and hold, the
 //! target's reaction, the module-end camera, the end) [F/emu
-//! `claude-units/BMODULE-SCOPE.md`].
+//! the project notes].
 //!
 //! - BMODULE record = card id; the module is linked at 0x1E00000 and keeps
 //!   its state in the data area 0x1ED0000.

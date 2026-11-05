@@ -4,6 +4,8 @@
 //!
 //! `ROSES_RECORD_TEST_GAME=<game.json> [ROSES_RECORD_TEST_OUT=<dir>]
 //! cargo test --features renderer --test record -- --ignored`
+//! (`ROSES_RECORD_TEST_SAVE=<folder holding memory-card/slot1>` as well for
+//! the Custom Duel test.)
 #![cfg(windows)]
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -226,4 +228,45 @@ fn sound_effect_lands_on_its_frame() {
         sound_s >= cue_s && sound_s - cue_s <= frame,
         "sound {sound_s:.4} s vs its cue at {cue_s:.4} s"
     );
+}
+
+/// Custom Duel from the title with Cross pressed all through the mode fade.
+/// The title kept reading the pad there: a press on the menu entry started a
+/// second load dialog that outlived the title and panicked on entry
+/// ("resource does not exist": `title_load_tick`'s OpeningState).
+#[test]
+#[ignore = "needs ROSES_RECORD_TEST_GAME and ROSES_RECORD_TEST_SAVE"]
+fn cross_during_the_fade_into_custom_duel() {
+    let out = fresh("custom-duel-fade.mp4");
+    let save = std::env::var_os("ROSES_RECORD_TEST_SAVE")
+        .expect("ROSES_RECORD_TEST_SAVE=<folder holding memory-card/slot1>");
+    let keys: Vec<String> = (5..=18).map(|f| format!("{}:x", f * 10)).collect();
+    let run = Command::new(env!("CARGO_BIN_EXE_roses-bevy-scene"))
+        .env("ROSES_MUTE", "1")
+        .env("ROSES_SAVE_DIR", save)
+        .arg("--game")
+        .arg(game())
+        .args([
+            "--start-stage",
+            "main-menu",
+            "--replay",
+            "down,down,cross",
+            "--story-auto",
+            "--record-size",
+            "640x480",
+            "--record-seconds",
+            "12",
+            "--record-keys",
+            &keys.join(","),
+            "--record",
+        ])
+        .arg(&out)
+        .output()
+        .unwrap();
+    let log =
+        String::from_utf8_lossy(&run.stderr).to_string() + &String::from_utf8_lossy(&run.stdout);
+    assert!(run.status.success(), "the game stopped:
+{log}");
+    assert!(log.contains("Game: Opening -> CustomDuel"), "{log}");
+    assert_eq!(log.matches("Custom Duel: op 3 result").count(), 1, "{log}");
 }

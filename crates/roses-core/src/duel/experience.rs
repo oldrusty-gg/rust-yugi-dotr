@@ -1,4 +1,4 @@
-//! Per-card experience (private research `claude-end/DUEL-END.md` §2).
+//! Per-card experience (private research the project notes §2).
 //!
 //! The only duel "score" of the original is an experience value per side and
 //! card id: u16 at card-block record +0x4A, changed by 0x2152A0(side, card,

@@ -1,5 +1,5 @@
 //! CMODULE c544 (0x220) "Spellbound", as traced in
-//! `claude-activate/FLIP-AND-VICTIMS.md` 2 [F code; emu: the model matched
+//! the project notes 2 [F code; emu: the model matched
 //! the interpreter's 3,732 vertices, alphas, UVs and the light curve to
 //! 0.062 px]: a billboard node at the victim's cell centre carries a
 //! TEXEFF 11 seal 160 units screen-up (far above the screen at the cell

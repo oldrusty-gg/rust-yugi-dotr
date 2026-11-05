@@ -4,7 +4,7 @@
 //! through the same pad input as a person, edit the duel directly under a
 //! fade-to-black, and page tutorial messages that the human confirms.
 //!
-//! Research (private): `work/research/duel/claude-tutorial/TUTORIAL.md`
+//! Research (private): the project notes
 //! with `steps-3N.txt` (every step of every lesson, decoded from the PAL
 //! executable, run in an R5900 interpreter and matched to saved states).
 //! Tags in comments: [F] from code, [emu] interpreter run, [O] saved state,

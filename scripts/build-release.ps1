@@ -73,7 +73,8 @@ if ($OnlineServer) {
 if (-not $TargetDir) { $TargetDir = Join-Path $repo 'work\runs\claude-release\target' }
 # Absolute: the game is built from crates\roses-game, where a relative
 # CARGO_TARGET_DIR would point somewhere else.
-$TargetDir = [IO.Path]::GetFullPath((Join-Path (Get-Location) $TargetDir))
+if (-not [IO.Path]::IsPathRooted($TargetDir)) { $TargetDir = Join-Path (Get-Location) $TargetDir }
+$TargetDir = [IO.Path]::GetFullPath($TargetDir)
 $triple = 'x86_64-pc-windows-msvc'
 $env:CARGO_TARGET_DIR = $TargetDir
 $env:ROSES_RELEASE = $Release

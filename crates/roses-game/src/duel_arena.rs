@@ -2,7 +2,7 @@
 //! stage models from `roses import-duel-arena`, the StageCam camera path and
 //! the units' arena poses.
 //!
-//! Traced [F/emu, `claude-units/ARENA-SCOPE.md`]:
+//! Traced [F/emu, the project notes]:
 //! - Phase 2 loads MODEL.MRG bank block 22 (object 7, shared) and block
 //!   23 + terrain (objects 8..); the terrain is the battle cell's. The
 //!   stage geometry is in world space at the origin.
@@ -249,17 +249,36 @@ fn effect_slot(cache: &EffectCache, card: u16) -> (std::sync::Arc<std::sync::Onc
     }
 }
 
+/// Calls before a headless port run is given up (the longest observed is
+/// 341).
+const MAX_CALLS: usize = 4000;
+
 /// Run `card`'s attack effect headless (handles: attacker side 1 slot 1,
 /// defender side 0 slot 1 as in the footage; the traced modules do not
 /// read them).
 fn run_effect(effects: &(Vec<u8>, Vec<u8>), card: u16, own: u16, target: u16) -> Option<Vec<i32>> {
-    match roses_ee::effects::attack_effect_returns(&effects.1, &effects.0, card, target, own) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("Duel arena: unsupported, not played: card {card}'s attack effect ({e})");
-            None
+    // The hand port (`roses_fx::bmodule::PORTED`) from an empty board. A
+    // panic there leaves the card without returns
+    // (`crate::duel_bmodule::guarded`), as a card that cannot load does.
+    crate::duel_bmodule::guarded(format_args!("Duel arena: card {card}'s attack effect"), || {
+        let image = roses_fx::bus::Image::from_elf(&effects.1).map(std::sync::Arc::new);
+        let Some(mut port) = image.and_then(|image| roses_fx::bmodule::BPort::load(image, &effects.0, card, [own, target], &Default::default())) else {
+            eprintln!("Duel arena: unsupported, not played: card {card}'s attack effect (its record or the executable in the import cannot be read)");
+            return None;
+        };
+        let world = crate::duel_opening_fx::BoardWorld { camera: roses_fx::types::CameraMirror { eye: [0.0; 3], target: [0.0, 0.0, 1.0], distance: 0.0, roll: 0.0 } };
+        let mut returns = Vec::new();
+        while returns.len() < MAX_CALLS {
+            let r = roses_fx::EffectPort::update(&mut port, &world).ret;
+            returns.push(r);
+            if r == 8 {
+                return Some(returns);
+            }
         }
-    }
+        None
+    })
+    .ok()
+    .flatten()
 }
 
 /// A provider over a loaded arena and a models import (its MONSTER.MRG
@@ -348,7 +367,7 @@ pub fn arena_provider(arena: &LoadedArena, models_manifest: std::path::PathBuf) 
         });
         let own = tex.clone().map(|t| t.into_iter().map(|t| t.map(|t| t.rh2)).collect());
         let own_images = tex.map(|t| std::sync::Arc::new(t.into_iter().map(|t| t.and_then(|t| t.image)).collect()));
-        Some(crate::duel_bmodule::EffectInputs { program, texeff: texeff.map(crate::duel_bmodule::texeff_records).unwrap_or_default(), own, own_images })
+        Some(crate::duel_bmodule::EffectInputs { program, texeff: texeff.map(crate::duel_bmodule::texeff_records).unwrap_or_default(), own, own_images, battle: None })
     });
     let cmodule = arena.cmodule.clone();
     Some(ArenaProvider { setup, prefetch, effect_inputs, cmodule, models_manifest: manifest_for_lord })
@@ -642,6 +661,11 @@ pub fn stage_world(model: &MapModel) -> Mat4 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_card_that_cannot_load_has_no_returns() {
+        assert_eq!(run_effect(&(Vec::new(), Vec::new()), 0, 1, 2), None);
+    }
 
     #[test]
     fn cmot_keys_interpolate_linearly() {

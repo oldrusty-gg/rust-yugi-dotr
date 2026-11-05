@@ -1,6 +1,6 @@
 //! CMODULE c555 (0x22B), Mirror Force / Mirror Wall (event 0x36, handler
 //! 0x26CDB0, one copy per target), as specified in
-//! `claude-activate/NEWLY-ALLOWED.md` section 9 [F code; emu: the reference
+//! the project notes section 9 [F code; emu: the reference
 //! model `tools/mf_c555_model.py` equals the interpreter's primitives to
 //! 0.0625 px in four runs]. World-anchored at the target's card position T
 //! (its cell centre, y 0), all additive (ALPHA 0x48):

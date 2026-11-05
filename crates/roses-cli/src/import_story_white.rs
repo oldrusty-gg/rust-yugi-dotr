@@ -1,9 +1,9 @@
 //! The White Rose (Yorkist) route's map story events, written by
 //! `roses import-story-red` next to the red route's (PAL SLES_515.79;
-//! private research `story/claude-story-white/NOTES.md`,
-//! `story/claude-campaign-map/WHITE-ROUTE-AUDIT.md` §2–3).
+//! private research `story/the project notes,
+//! `story/the project notes §2–3).
 //!
-//! Traced in the EE interpreter (`claude-story-white/tools/trace_white.py`,
+//! Traced in the EE interpreter (the project notes,
 //! the game's own handlers from the patched post-duel state with SAVE[0] =
 //! 1; every 2D draw leaf recorded) [emu]:
 //! - 12040 (0x221AD4, Dover) and 12041 (0x221BEC, the Strait): Mako's
@@ -295,7 +295,7 @@ mod tests {
     }
 
     /// Private oracle: `ROSES_STORY_WHITE_ORACLE` = the research directory
-    /// `story/claude-story-white` with `trace-{dover,brest,manawyddan}.json`
+    /// `story/the project notes with `trace-{dover,brest,manawyddan}.json`
     /// (tools/trace_white.py). Every page: letterbox, pan W+5439, top-panel
     /// latch, figure / painting quads, moods, panel colour selectors.
     #[test]

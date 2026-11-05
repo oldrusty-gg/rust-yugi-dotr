@@ -1,6 +1,6 @@
 //! CMODULE c507 (0x1FB), Harpie's Feather Duster's feather (event 7, handler
 //! 0x25A080: one per target), as specified in
-//! `claude-activate/NEWLY-ALLOWED.md` section 12 [F code; emu: the reference
+//! the project notes section 12 [F code; emu: the reference
 //! model `tools/mf_c507_model.py` equals the interpreter's primitives to
 //! 0.0625 px in four runs]. Anchored at the target's card position (cell
 //! centre):

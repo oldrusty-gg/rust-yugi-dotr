@@ -1,6 +1,6 @@
 //! CMODULE c612 (0x264), the crush (event 0x70, handler 0x274D90: Crush
 //! terrain, Aqua Chorus's virus), as specified in
-//! `claude-activate/MORE-EFFECTS.md` section 5 [F code; emu: the reference
+//! the project notes section 5 [F code; emu: the reference
 //! model `tools/mf_c612_model.py` equals the interpreter's primitives to
 //! 0.0625 px in three runs]. Anchored at the victim's model point (0x1F65C0(1),
 //! (0, 0, 0) when no model is shown), both nodes billboards:
@@ -48,7 +48,7 @@ pub const SE_ID: u16 = 0x50;
 pub const SE_U: u32 = 1;
 /// Random values drawn at init.
 pub const INIT_RAND: u32 = 320;
-/// TEXEFF record and its sheet size (`claude-units/texeff/015.png`).
+/// TEXEFF record and its sheet size (the project notes).
 pub const SHEET: u8 = 15;
 const SHEET_SIZE: f32 = 256.0;
 const SMOKE_RGB: [[u8; 3]; 2] = [[64, 32, 96], [128, 64, 128]];

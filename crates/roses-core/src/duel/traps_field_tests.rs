@@ -1,6 +1,6 @@
 //! Shadow of Eyes (trap 0x23), Mirror Wall (0x31), Fake Trap (0x4B) with
 //! Harpie's Feather Duster, and magic cards left face-up on the field
-//! (claude-effects/TRAPS-0x23-0x31-FAKE-TRAP-FIELD.md; emu cases S, W, F, M).
+//! (the project notes; emu cases S, W, F, M).
 //! Synthetic cards shaped like the originals; only the Duster keeps its real
 //! id because the builder binds event 7 to it.
 

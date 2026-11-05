@@ -797,7 +797,7 @@ struct VersusLayer {
     sheets: std::collections::HashMap<u8, Option<Handle<Image>>>,
     /// The attack effects' textures by (attacker card, key), with their
     /// sizes (alpha = GS alpha * 255 / 128).
-    bfx: std::collections::HashMap<(u16, roses_ee::bmodule::TextureKey), Option<(Handle<Image>, (u32, u32))>>,
+    bfx: std::collections::HashMap<(u16, roses_fx::types::TextureKey), Option<(Handle<Image>, (u32, u32))>>,
     /// Attack-effect draws not reproduced, reported once per kind.
     bfx_reported: std::collections::BTreeSet<String>,
 }
@@ -1318,7 +1318,7 @@ fn online_play(data: duel_play::DuelData, o: &OnlineOptions) -> Result<DuelPlay,
         "Online: the server's switches (1P / 2P): Leader Ability {}, Card Display {}{}",
         say(o.leader_ability, "USE", "NOT USE"),
         say(o.card_display_open, "OPEN", "HIDE"),
-        if o.card_display_open[usize::from(link.seat & 1)] { "" } else { " (hold R2 / your R2 key to see your own hidden cards)" }
+        if o.card_display_open[usize::from(link.seat & 1)] { "" } else { " (this seat's hand and face-down cards stay hidden from the other seat)" }
     );
     DuelPlay::online(data, link)
 }
@@ -1589,7 +1589,7 @@ fn parse(args: impl Iterator<Item = OsString>) -> Result<Options, String> {
                     "roses-bevy-scene --duel-board <duel-board manifest.json> [--duel-units <overlay-input.json> | --no-overlays] [--cursor c,r] [--map 0..45 | --terrain <49 digits>] [--window-kinds k0,k1] [--backdrop-angle u16] [--brightness 0..128] [--rgb888] [--replay right,up,... [--ticks n]] [--validate-only | --capture <new.png>]\n--duel-units is a duel_overlay::OverlayInput (state, active_side, marks, move_allowance, path, brightness, units, pulse, settled); without it the board shows the browsing cross and cursor. --replay applies one cursor step per 25 Hz update from the start state, then runs --ticks updates in total (default: steps + 8, at most {MAX_TICKS}) before the first frame. Arrow keys move the side-0 cursor one cell with the original linear 8-update camera track at 25 Hz; Escape closes. {NOT_IMPLEMENTED}.\n\nroses-bevy-scene --duel-board <manifest.json> --duel-play <duel import dir> [--seed u64 (default {})] [--player human|computer] [--replay-pad square,up,cross*2,none,up+left,... [--ticks n]] [--duel-end <duel-end import dir> [--end-replay none*80,cross,...]] [--duel-models <duel-models manifest.json>] [--map n | --terrain <49 digits>] [--validate-only | --capture <new.png>]\nPlays the first campaign duel against Weevil; with --duel-end the duel's end runs the result screens over the board (--end-replay scripts their pad from the first result frame); with --duel-models leaders and face-up monsters are drawn with their MONSTER.MRG models (the cursor unit over the board, under the HUD); the session owns the cursor and units (no --cursor, --replay, --duel-units or --no-overlays). --replay-pad presses the listed buttons (none = no press, a+b together, x*n = n updates; at most {} entries) one per 25 Hz update from the start, then runs --ticks updates in total (default: entries + 8, at most {MAX_TICKS}). Keys: arrows = d-pad, X Cross, A Square, Z Circle, D Triangle, S Start, Tab Select, Q L1, E R1, 1 L2, W R2 (held arrows repeat from the 13th update after the press; other buttons act once per press); Escape closes. The window title shows round, side to act, LP, stars, input state and the last refused or unsupported press.
 
 roses-bevy-scene --game <game.json> --online <127.0.0.1:port> [--seat 0|1 | --resume <token>] [--deck-save <memory-card slot folder or data file> [--deck 0|1|2] | --deck-file <deck.json> | --import-side 0|1] [--replay-pad ... --capture <new.png>] [--online-bot] [--online-until remote-hand|remote-pick|remote-flight|result|end]
-Plays one seat of an online duel against a loopback `roses-server` (the duel parts of the game import; or --duel-board <manifest> --duel-play <duel import> --online ...): joins with the seat's own deck (refused before the match when it breaks the deck rules), waits for the other seat, then the pad drives the input states on the seat's copy of the duel and every intention goes to the server; the board and HUD show the server's revisions, and the other seat's turn shows its streamed presses (cursor, menus, hand row, summon flight) as the original's 2-player duel does. The server decides Leader Ability / Card Display (HIDE: hold R2, key W, to see your own hidden cards). The duel ends with the 1P WIN / 2P WIN / DRAW result; the window closes after it. A scripted --replay-pad press waits until the seat may act. Headless: --online-bot plays this seat through its pad (a streaming computer player), --online-until runs updates until that moment (then --capture or --validate-only).",
+Plays one seat of an online duel against a loopback `roses-server` (the duel parts of the game import; or --duel-board <manifest> --duel-play <duel import> --online ...): joins with the seat's own deck (refused before the match when it breaks the deck rules), waits for the other seat, then the pad drives the input states on the seat's copy of the duel and every intention goes to the server; the board and HUD show the server's revisions, and the other seat's turn shows its streamed presses (cursor, menus, hand row, summon flight) as the original's 2-player duel does. The server decides Leader Ability / Card Display (HIDE keeps a seat's hand and face-down cards from the other seat; a seat always reads its own). The duel ends with the 1P WIN / 2P WIN / DRAW result; the window closes after it. A scripted --replay-pad press waits until the seat may act. Headless: --online-bot plays this seat through its pad (a streaming computer player), --online-until runs updates until that moment (then --capture or --validate-only).",
                     duel_play::DEFAULT_SEED,
                     duel_play::MAX_REPLAY_PAD
                 );
@@ -2186,10 +2186,10 @@ fn end_advance(
             }),
             // Two pads: 1P WIN / 2P WIN / DRAW with D54 = D50, the winner
             // (2 for a draw: no portrait) [F DUEL-END.md 0].
-            banner::P1_WIN | banner::P2_WIN | banner::DRAW => Some(BannerKind::Result {
-                code: view.banner,
-                side: active.winner,
-            }),
+            banner::P1_WIN | banner::P2_WIN | banner::DRAW => {
+                let (code, side) = roses_game::duel_end_screens::seat_result(view.banner, active.winner, play.hud_own_side());
+                Some(BannerKind::Result { code, side })
+            }
             banner::PROMOTION | banner::DEMOTION => view.rank_entry.map(|e| BannerKind::Rank {
                 demotion: e.demotion,
                 side: e.side,
@@ -3041,7 +3041,7 @@ fn build_effect_prims(
     (canvas, z): (usize, bool),
 ) {
     use roses_game::duel_bmodule;
-    use roses_ee::bmodule::TextureKey;
+    use roses_fx::types::TextureKey;
     // Textures first (sizes are needed for the UVs).
     for p in draw.prims.iter() {
         let Some(key) = p.texture.filter(|k| matches!(k, TextureKey::TexEff(_) | TextureKey::Own(_))) else { continue };
@@ -3396,7 +3396,7 @@ fn table_blend(index: u8) -> u8 {
 }
 
 /// The attack effects' unit object writes beyond the multiplier [F 0x1EFD08
-/// .. 0x1F0860; emu claude-bmodule emu-pass]: the full-window colour pass
+/// .. 0x1F0860; emu the project notes emu-pass]: the full-window colour pass
 /// over the unit in its offscreen target (an untextured sprite after the
 /// model, RGB blended by 0x208450(obj+0x1F8 bits 2-3), the target's alpha
 /// kept: FBMSK 0xFF000000), and the composite of that target with an ALPHA
@@ -4391,7 +4391,7 @@ fn build_extra_fx(
             // trail that needs the frame history this canvas does not keep;
             // without the history the subtraction alone blacks the screen,
             // so the whole list is left out (reported at the launch).
-            let prims = if prims.iter().any(|p| p.texture == Some(roses_ee::bmodule::TextureKey::Frame)) {
+            let prims = if prims.iter().any(|p| p.texture == Some(roses_fx::types::TextureKey::Frame)) {
                 std::sync::Arc::new(Vec::new())
             } else {
                 prims

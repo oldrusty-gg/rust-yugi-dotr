@@ -1,6 +1,6 @@
 //! The memory-card dialogs of the map's SYSTEM → SAVE (op 1) and the title's
 //! Continue (op 0), and SAVE ↔ the port's campaign state (Claude, 4 Oct
-//! 2026). Notes, traces and captures: `work/research/story/claude-save/`.
+//! 2026). Notes, traces and captures: the project notes.
 //!
 //! The original: 0x1AB8F0(op) starts an op of the card module, 0x1ABB20()
 //! runs it once per update (the map calls it while W+543E = 1, the title
@@ -16,12 +16,12 @@
 //! boxes [H] — the port's card is a local file, so it completes at once too.
 //!
 //! The ending's save (op 2, event 11184 sub-step 3 at 0x221750; traced in
-//! `work/research/story/claude-ending/`) runs the same steps behind a
+//! the project notes) runs the same steps behind a
 //! first "Save?" question with YES preselected; its refusals, failures and
 //! NO answers return to that question, and only NO / Circle there gives up.
 //!
 //! Op 3 (the title's Custom Duel, traced in
-//! `work/research/modes/other-modes/` and `modes/custom-duel/`) loads
+//! the project notes and `modes/custom-duel/`) loads
 //! slot 1 as op 0 does, then checks MEMORY CARD slot 2: "Checking MEMORY
 //! CARD slot 2" (3521), with a save of this game "Loading… slot 2" (3538),
 //! then "Load complete" (3540); the result's high byte − 1 picks Custom
@@ -31,7 +31,7 @@
 //! op3-*]. Its slot-1 failures are op 0's [H: not run].
 //!
 //! Op 4 (the title's Trade) and op 5 (Trade's save; traced in
-//! `work/research/modes/two-player/`, `tools/opvar.py`, `op45.py`)
+//! the project notes, `tools/opvar.py`, `op45.py`)
 //! [emu]: op 4 loads slot 1 as op 0 with "Loading... slots" (3539), checks
 //! slot 2 (3521) and loads it (3539 again), then "Load complete - do not
 //! remove the MEMORY CARD while trading" (3560) returns 1 with both files;

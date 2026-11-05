@@ -1,5 +1,5 @@
-//! Frame timing against the traces (`story/claude-story-red/trace-trigger
-//! .json`, `trace-win.json`, `trace-manawyddan.json`, `claude-story-white/
+//! Frame timing against the traces (`story/the project notes
+//! .json`, `trace-win.json`, `trace-manawyddan.json`, the project notes
 //! trace-manawyddan.json`): frame numbers are the traces', the event's C2
 //! frame is its first update; Cross is pressed on the traced press frames.
 use super::*;
@@ -535,7 +535,7 @@ fn private_story_motion_plays_the_imported_events() {
         (&[12130, 12132], &[]),
         (&[12150, 12152, 12154], &[]),
     ];
-    // ROSES_MAP_BEHIND_ORACLE = `story/claude-map-behind/oracle-behind.json`
+    // ROSES_MAP_BEHIND_ORACLE = `story/the project notes
     // (extract_oracle.py): per chain and traced frame what the original shows
     // behind the 2D layers (M map, S scene 0, . covered). Each update's
     // overlay must leave the world visible exactly where the trace does, and

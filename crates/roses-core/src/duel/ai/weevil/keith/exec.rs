@@ -132,7 +132,7 @@ pub(in super::super) fn lane<O: Opponent, C: CardData + ?Sized, F: FusionData + 
 /// call at 0x1AAF44) and afterwards writes it only with 64-bit ADDIU.
 /// Every function in the executable that writes $s2's upper half saves
 /// and restores it with sq / lq, so the half stays 0 through all callees.
-/// See `work/research/duel/claude-ai/TIE-0x120A20.md`. [F, static]
+/// See the project notes. [F, static]
 const CALLER_S2_TOP: u8 = 0;
 
 /// 0x120A20(rec, side, d, which): plan 0xB (the target is a unit key);

@@ -978,7 +978,7 @@ mod tests {
     }
 
     /// The original's player block during the first duel (the private
-    /// capture `duel/claude-end/fixture-767-weevil-after-t15/blk0.bin` under
+    /// capture `duel/the project notes under
     /// `ROSES_RESEARCH_DIR`, default `work/research`; turn 15, before
     /// the result screens) against the new game's layout up to the key and
     /// the random ids: recent list, the three deck records, current deck,

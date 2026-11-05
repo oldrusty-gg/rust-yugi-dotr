@@ -1,6 +1,6 @@
 //! The end of a route and what Continue does after it (Claude, 4 Oct 2026).
 //! Notes, disassembly, emulator logs and captures:
-//! `work/research/story/claude-ending/NOTES.md`.
+//! the project notes.
 //!
 //! Red route, map event 11184 (0x221584, the story dispatcher 0x21DD80) after
 //! its 18 captions 2984..3028 [F, emu `ending-fresh`]:
@@ -27,7 +27,7 @@
 //! There are no 2D credits: whatever the ending shows after the dialogue is
 //! inside EDMV_A6 (120 s) [F: nothing else runs between the save and the
 //! title]. The white route ends the same way at 0x222BF0..0x222D3C after
-//! its 15 captions 3464..3508 (event 12156) [F, emu `claude-story-white`
+//! its 15 captions 3464..3508 (event 12156) [F, emu the project notes
 //! trace-manawyddan: Cross f1466, text close f1467..f1471, letterbox 152
 //! f1472 .. 256 f1485, op 2 f1486 — the red timing]: SAVE+0x3C = 0,
 //! **SAVE[2] = 1**, block bit 5 when SAVE[1] is set too, op 2, then movie 3
@@ -548,7 +548,7 @@ mod tests {
         s
     }
 
-    /// The emulated white tail [emu claude-story-white trace-manawyddan]:
+    /// The emulated white tail [emu the project notes trace-manawyddan]:
     /// Cross on 3508 at f1466, text close f1467..f1471, letterbox 152 at
     /// f1472 .. 256 at f1485, op 2 at f1486 (update 20), then movie 3 and
     /// C2 = 0 in the update the dialog returns −1.

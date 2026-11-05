@@ -101,7 +101,7 @@ mod video_tests;
 /// height +0x240 of 0x2E93D0 = 0x200 = the PAL entry's), for a second one
 /// when the first returned field 1, so an update spans two fields [F].
 /// Measured [emu]: in PCSX2 savestates of the map (C2 0, 652-mup ..),
-/// the duel (claude-pine 001..039) and the history recording, the EE cycle
+/// the duel (the project notes 001..039) and the history recording, the EE cycle
 /// counter advances 11,796,480 cycles (= 294.912 MHz / 25) and the vsync
 /// counter 0x2E8E98 two fields (5,898,240 cycles each) per main-loop
 /// iteration 0x2DA950. Before 7 Oct 2026 the port assumed one update per

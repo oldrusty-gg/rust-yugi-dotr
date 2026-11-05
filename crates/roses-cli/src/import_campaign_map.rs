@@ -7,7 +7,7 @@
 //! models of MODEL.MRG bank block 35 (slots 34..=65) with GS-byte PNG
 //! textures, the needed message pages and a hashed manifest. Follows
 //! `import_duel_board.rs`; see the private research
-//! `story/claude-campaign-map/MAP.md`.
+//! `story/the project notes.
 use crate::import_duel_board::gs_rgba;
 use crate::import_story::message_image;
 use crate::{emit_json, open_pal, write_png, Result};

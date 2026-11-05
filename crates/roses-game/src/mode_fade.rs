@@ -13,7 +13,7 @@
 //! The title menu's own requests (Continue, Custom Duel, Trade: 0x1ACEE4,
 //! 0x1AD0EC..0x1AD2F4) use the same fade.
 //!
-//! [emu PCSX2 + PINE, research `story/claude-faces/tools/mode_fade_pine.py`]:
+//! [emu PCSX2 + PINE, research `story/the project notes]:
 //! duel → slot machine: ch 0 t 0 → 60 one per update, the mode init on the
 //! update after t = 60, ch 1 paused at t = 0 (black) for the load (38
 //! updates in PCSX2), then t 0 → 60 and idle; the slot machine → map pop
@@ -198,6 +198,14 @@ fn pause(world: &mut World, on: bool) {
         time.pause();
     } else {
         time.unpause();
+    }
+}
+
+impl ModeFade {
+    /// The old scene is on its way out (the fade-out or the black hold): the
+    /// switch request has moved from `GameFlow::next` into this fade.
+    pub fn leaving(&self) -> bool {
+        matches!(self.phase, Phase::Out { .. } | Phase::Loading { .. })
     }
 }
 
@@ -529,5 +537,17 @@ mod tests {
         for (from, to) in [(Map, Opening), (Trade, Opening), (Duel, SlotMachine), (CustomDuel, Duel), (Duel, CustomDuel), (CustomDuel, DeckEditor), (DeckEditor, CustomDuel)] {
             assert!(!shows_now_loading(from, to), "{from:?} -> {to:?}");
         }
+    }
+
+    /// The title takes no pad while it is leaving: `hold` clears
+    /// `GameFlow::next` for the whole fade-out, so this is what says so.
+    #[test]
+    fn the_old_scene_is_leaving_through_the_fade_out_and_the_black_hold() {
+        let at = |phase| ModeFade { phase, ..Default::default() };
+        assert!(!at(Phase::Idle).leaving());
+        assert!(at(Phase::Out { k: 0, to: GameScene::CustomDuel }).leaving());
+        assert!(at(Phase::Out { k: FADE_UPDATES, to: GameScene::CustomDuel }).leaving());
+        assert!(at(Phase::Loading { overlay: NowLoading::start(), loaded: false, load: 0, music: 0 }).leaving());
+        assert!(!at(Phase::In { k: 0 }).leaving());
     }
 }

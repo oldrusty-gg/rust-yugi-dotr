@@ -1,7 +1,7 @@
 //! The duel hand row's motion (states 0x3F-0x42 open and draw-in, 0x40
 //! close, 0x44-0x45 pick and its cancel) as presentation over the input
 //! machine, which skips those states [F/emu
-//! `claude-card-face/HAND-SLIDE-AND-FADE.md` part 1]:
+//! the project notes part 1]:
 //! - six slot animators lerp linearly with t = counter / 128 (no easing);
 //! - open: 8 updates, d45 += 16, fy = 512 - 504 d45 / 128; cards drawn since
 //!   the row last showed wait at fx = 606 and fly in one at a time over 3

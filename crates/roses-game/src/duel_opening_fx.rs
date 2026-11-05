@@ -1,9 +1,9 @@
 //! The leaders' appearance effect at the duel's start, CMODULE c620
 //! (program 0x26C, `0x1F5B00(0, 0x26C, 0, cell, 0)` per side in input state
-//! 0xB, 0x1D0638) run as original code by the effect runner
-//! (`roses_ee::bmodule::AttackEffect::load_cmodule`) with the board camera
-//! mirrored, as the attack effects are; its GS primitives are drawn over
-//! the board. Bevy-free.
+//! 0xB, 0x1D0638), hand-ported to plain Rust (`roses_fx::c620`, equal to
+//! the original update for update, bit for bit: `roses_ee::parity`, the
+//! test oracle, not linked into the game), with the board camera mirrored; its GS primitives
+//! are drawn over the board. Bevy-free.
 //!
 //! Source [F]: the module reads only its target (0x1F6590: row << 8 |
 //! column), the cell's position (0x1E2370), TEXEFF record 15 (0x103260) and
@@ -15,7 +15,9 @@
 //!
 //! [H]: rand starts from the executable's state (the game's depends on the
 //! session); the launch's init and first update run in the launch update.
-use roses_ee::bmodule::{AttackEffect, CameraMirror, EffectTextures, EffectWorld, GsPrim, UnitMirror};
+use crate::duel_bmodule::guarded;
+use roses_fx::EffectPort;
+use roses_fx::types::{CameraMirror, EffectTextures, EffectWorld, GsPrim, UnitMirror};
 use std::sync::Arc;
 
 /// CMODULE program of the leaders' appearance.
@@ -60,9 +62,11 @@ pub fn board_camera(eye: [f64; 3], target: [f64; 3]) -> CameraMirror {
 
 /// One side's running c620.
 pub struct LeaderEffect {
-    /// Behind a mutex: the runner's CPU is `Send`, not `Sync` (the duel
+    /// Behind a mutex: a port is `Send`, not `Sync` by contract (the duel
     /// play is a Bevy resource).
-    effect: std::sync::Mutex<AttackEffect>,
+    effect: std::sync::Mutex<roses_fx::c620::C620>,
+    /// The port panicked (`duel_bmodule::caught`).
+    stopped: bool,
     /// The last update's return (2 once the leader shows, 8 at the end).
     pub ret: i32,
     /// Updates run after the launch (the launch's own update is 1).
@@ -77,10 +81,11 @@ impl LeaderEffect {
     pub fn launch(executable: &[u8], cmodule: &[u8], texeff: Option<&[u8]>, cell: (u8, u8), camera: CameraMirror) -> Option<Self> {
         let textures = EffectTextures { texeff: texeff.map(crate::duel_bmodule::texeff_records).unwrap_or_default(), own: Vec::new(), other: Vec::new() };
         let target = (u16::from(cell.1) << 8) | u16::from(cell.0);
-        let effect = AttackEffect::load_cmodule(executable, cmodule, C620, [0, target], &textures).ok()??;
-        let mut fx = Self { effect: std::sync::Mutex::new(effect), ret: 0, updates: 0, prims: Arc::new(Vec::new()) };
+        let effect = guarded("c620: the leader effect", || roses_fx::c620::C620::load(executable, cmodule, [0, target], &textures)).ok()??;
+        let mut fx = Self { effect: std::sync::Mutex::new(effect), stopped: false, ret: 0, updates: 0, prims: Arc::new(Vec::new()) };
         let world = BoardWorld { camera };
-        fx.effect.get_mut().ok()?.update(&world).ok()?;
+        let effect = fx.effect.get_mut().ok()?;
+        guarded("c620: the leader effect", || effect.update(&world)).ok()?;
         fx.update(camera);
         Some(fx)
     }
@@ -88,20 +93,19 @@ impl LeaderEffect {
     /// One update with this update's camera; false once it has ended.
     pub fn update(&mut self, camera: CameraMirror) -> bool {
         let Ok(effect) = self.effect.get_mut() else { return false };
-        if effect.finished {
+        if self.stopped || effect.finished() {
             self.prims = Arc::new(Vec::new());
             return false;
         }
-        match effect.update(&BoardWorld { camera }) {
+        match guarded("c620: the leader effect", || effect.update(&BoardWorld { camera })) {
             Ok(u) => {
                 self.ret = u.ret;
                 self.updates += 1;
                 self.prims = Arc::new(u.prims);
                 true
             }
-            Err(e) => {
-                eprintln!("c620: the leader effect stopped: {}", e.0);
-                effect.finished = true;
+            Err(_) => {
+                self.stopped = true;
                 self.prims = Arc::new(Vec::new());
                 false
             }
@@ -109,7 +113,7 @@ impl LeaderEffect {
     }
 
     pub fn finished(&self) -> bool {
-        self.effect.lock().map_or(true, |e| e.finished)
+        self.stopped || self.effect.lock().map_or(true, |e| e.finished())
     }
 }
 

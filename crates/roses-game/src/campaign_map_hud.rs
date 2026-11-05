@@ -6,7 +6,7 @@
 //! 0x2349B0 (SYSTEM box), 0x229C40 (cursor), 0x234CC0 (hover panel) and
 //! 0x2360C0 (place tooltip) were read instruction by instruction, and the
 //! calls they make were logged from the EE interpreter at state 622 + 47
-//! frames (`story/claude-campaign-map/logs/hud-oracle-622-f46.json`, Chester
+//! frames (`story/the project notes, Chester
 //! hovered); the private test below compares this builder's calls with
 //! that log. The emitters: 0x217360 (sprite descriptor: rect + offset, the
 //! sprite record 0x294480 + 20·id gives the atlas rect and slot 0 = TEXSYS
@@ -1248,7 +1248,7 @@ pub fn dialogue_face(model: &MapModel) -> Option<((u8, u8, i16, i16), u8)> {
 /// (clamped to 0x80) where the gate holds, the gates seeing this pass's
 /// values: TL of row 0 always, of row r when row r−1's TR ≥ 0x80; BL when
 /// TL ≥ 0x41; TR when BL ≥ 0x80; BR when TR ≥ 0x21. 1/2/3-line pages
-/// finish in 7/13/19 updates [F, emu claude-dialogue-phases].
+/// finish in 7/13/19 updates [F, emu the project notes].
 pub fn reveal_alphas(rows: usize, updates: u32) -> [[u8; 4]; 3] {
     // Shared with the story scene's motion.
     roses_client::story_motion::reveal_alphas(rows.max(1), updates)
@@ -2031,7 +2031,7 @@ mod tests {
     }
 
     /// Mako's bottom panel over the map (12040) against trace-dover
-    /// (`story/claude-story-white/trace-dover.json`, ROSES_MAKO_MAP_ORACLE)
+    /// (`story/the project notes, ROSES_MAKO_MAP_ORACLE)
     /// at f20 (sliding in), f40 (full, page box opening) and f62 (the page
     /// waits): every panel quad (emblem, name window and face window
     /// pieces, advance mark), the window fills, the wing/ornament quads

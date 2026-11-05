@@ -1,6 +1,6 @@
 //! The opening voyage: map events 100 (Stonehenge → Brest), 101 (Brest →
 //! Milford Haven) and 102 (Milford Haven's reveal). Source facts (PAL
-//! SLES_515.79, private research `story/claude-campaign-map/sail/`):
+//! SLES_515.79, private research `story/the project notes):
 //!
 //! - Dispatcher 0x2263B0: C2 100 → 0x2266FC, 101 → 0x226968, 102 → 0x226B78
 //!   (the generic reveal 0x228210 on node 1) [F].

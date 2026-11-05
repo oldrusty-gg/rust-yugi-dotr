@@ -1,6 +1,6 @@
 //! Bevy-free glue between the arena battle (`duel_arena_battle`) and the
-//! attack-effect runner `roses_ee::bmodule` (research:
-//! `duel/claude-bmodule/NOTES.md`):
+//! hand-ported attack effects `roses_fx::bmodule` (research:
+//! `duel/the project notes):
 //! - [`BattleWorld`] mirrors the battle into the runner: the arena camera,
 //!   the two unit objects and their skeleton node results (node origin under
 //!   the object matrix at the current motion time, arena objects not
@@ -13,7 +13,7 @@
 //!   lags one update during the exit].
 use crate::duel_arena_battle::{ArenaBattle, FxShared, Unit};
 use roses_client::monster_pose;
-use roses_ee::bmodule::{AttackEffect, CameraMirror, EffectTextures, EffectWorld, GsPrim, TextureKey, UnitMirror, UnitWrites};
+use roses_fx::types::{BattleState, BattleUnit, CameraMirror, EffectTextures, EffectWorld, GsPrim, TextureKey, UnitMirror, UnitWrites};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex};
@@ -36,6 +36,36 @@ pub fn forced_battle() -> Option<(u16, u16, u8)> {
     let v = std::env::var("ROSES_ARENA_FORCE").ok()?;
     let p: Vec<u16> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
     (p.len() == 3).then(|| (p[0], p[1], p[2] as u8))
+}
+
+/// What a port's panic is reported with (in `WorkerStats::stops` too).
+const PANICKED: &str = "port panicked";
+
+/// The net under port code. The ports have branches that `panic!` (never
+/// ported or never reached [F]) and no test proves them unreachable [H];
+/// the battle has to go on all the same. So a panic in `f` is logged and
+/// comes back as an `Err`: the caller stops
+/// the effect and the game goes on. Nothing of the panicked port is used
+/// again, so a half-done update is not seen.
+pub fn caught<T>(what: impl std::fmt::Display, f: impl FnOnce() -> T) -> Result<T, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|p| {
+        let cause = p.downcast_ref::<&str>().map(|s| (*s).to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "no message".into());
+        eprintln!("{what}: {PANICKED}, the effect stops, the game goes on: {cause}");
+        format!("{PANICKED}: {cause}")
+    })
+}
+
+/// [`caught`] for port code on the caller's thread; in this crate's tests
+/// the panic goes on up, so a test (and the sweep's `panicked` rows) fails
+/// on it. The worker uses [`caught`]: a panic there fails the test in
+/// [`EffectWorker::tick`].
+pub fn guarded<T>(what: impl std::fmt::Display, f: impl FnOnce() -> T) -> Result<T, String> {
+    let result = caught(what, f);
+    #[cfg(test)]
+    if let Err(e) = &result {
+        panic!("{e}");
+    }
+    result
 }
 
 /// Updates the worker may run ahead (absorbs the heaviest calls, B220's
@@ -130,11 +160,13 @@ pub struct BattleWorld<'a> {
     pub models: [u16; 2],
     /// Node origins by role, evaluated once per update.
     pub nodes: [std::cell::OnceCell<Option<Vec<[f32; 3]>>>; 2],
+    /// What the outcome boundary 0x1F8100 reads; `None`: not mirrored.
+    pub state: Option<BattleState>,
 }
 
 impl<'a> BattleWorld<'a> {
     pub fn new(battle: &'a ArenaBattle, attacker: usize, models: [u16; 2]) -> Self {
-        Self { battle, attacker, models, nodes: Default::default() }
+        Self { battle, attacker, models, nodes: Default::default(), state: None }
     }
     fn unit_of(&self, role: usize) -> &Unit {
         &self.battle.units[if role == 0 { self.attacker } else { 1 - self.attacker }]
@@ -177,6 +209,9 @@ impl EffectWorld for BattleWorld<'_> {
     fn node(&self, role: usize, node: u8) -> Option<[f32; 3]> {
         self.origins(role)?.get(usize::from(node)).copied()
     }
+    fn battle(&self) -> Option<BattleState> {
+        self.state
+    }
     /// One counter for the battle's modules, one count per update, as the
     /// game's [F 0x209120 increments 0x2E963C per flip]; its origin is the
     /// footage battle's (update 90 = frame 95641, B125 at 95965: the
@@ -185,6 +220,22 @@ impl EffectWorld for BattleWorld<'_> {
     fn frame_counter(&self) -> Option<u32> {
         Some(self.battle.updates.wrapping_add(FRAME_COUNTER_ORIGIN))
     }
+}
+
+/// The nine records that call the outcome boundary 0x1F8100 [F bscan.json;
+/// OUTCOME-BOUNDARY.md 1]. Only they get the battle mirrored: every other
+/// record's varied parity ran without it, so they stay as proven.
+pub const OUTCOME_CARDS: [u16; 9] = [2, 16, 17, 88, 226, 339, 400, 614, 664];
+
+/// The handle words the modules are loaded with, by role (0 the attacker).
+pub const ROLE_HANDLES: [u16; 2] = [0x101, 0x001];
+
+/// A real battle as [`BattleState`] on [`ROLE_HANDLES`]: `units` = (attacker,
+/// defender) with their stats at the defender's `cell`; `attacker_active`:
+/// the attacker's side is `Duel::active` (0x2DB8F4).
+pub fn battle_state(units: [BattleUnit; 2], attacker_active: bool, cell: (u8, u8)) -> BattleState {
+    let active = if attacker_active { ROLE_HANDLES[0] } else { ROLE_HANDLES[1] };
+    BattleState { roles: ROLE_HANDLES, active_side: (active >> 8) as u8, cell, units: units.map(Some) }
 }
 
 /// The footage battle's frame counter at update 0 (95641 - 90).
@@ -199,6 +250,9 @@ pub struct EffectInputs {
     pub own: [Vec<Option<Vec<u8>>>; 2],
     /// The same decoded for drawing (alpha = GS alpha * 255 / 128).
     pub own_images: [Arc<Vec<Option<roses_assets::RgbaImage>>>; 2],
+    /// The duel's battle behind this scene; `None` without one: the outcome
+    /// boundary then answers 1, the zero image's answer.
+    pub battle: Option<BattleState>,
 }
 
 /// One module call made by the worker's battle.
@@ -208,7 +262,7 @@ pub struct CallResult {
     pub call: usize,
     /// `None`: the program is missing or stopped (the cached return is used).
     pub ret: Option<i32>,
-    /// In GS order (`roses_ee::bmodule::draw_order`).
+    /// In GS order (`roses_fx::types::draw_order`).
     pub prims: Vec<GsPrim>,
     pub boundary: Vec<(u32, &'static str, [u32; 4])>,
     pub missing_textures: Vec<(i32, i32)>,
@@ -243,10 +297,13 @@ struct Checkpoint {
     battle: ArenaBattle,
     present: [bool; 2],
     dead: [bool; 2],
-    /// Per running effect: calls, finished, registers before the update and
-    /// the pages the update wrote (their previous contents).
-    fx: [Option<(usize, bool, roses_ee::Regs, roses_ee::Journal)>; 2],
+    /// A copy of each running effect.
+    fx: [Option<Effect>; 2],
 }
+
+/// One role's running attack effect: the hand port (`roses_fx::bmodule`,
+/// equal to the original update for update: `roses_ee::parity`).
+type Effect = Box<roses_fx::bmodule::BPort>;
 
 /// Updates the worker can rewind (it runs at most `LOOKAHEAD` + 1 ahead).
 const CHECKPOINTS: usize = LOOKAHEAD + 4;
@@ -312,12 +369,11 @@ impl Drop for EffectWorker {
 }
 
 /// Model indices of both cards (from the executable's table).
-fn models_of(exe: &[u8], cards: [u16; 2]) -> [u16; 2] {
-    let mut cpu = roses_ee::Cpu::new();
-    if cpu.load_elf(exe).is_err() {
+fn models_of(image: Option<&roses_fx::bus::Image>, cards: [u16; 2]) -> [u16; 2] {
+    let Some(image) = image else {
         return [0; 2];
-    }
-    cards.map(|c| roses_ee::effects::model_index(&mut cpu, c).unwrap_or(0))
+    };
+    cards.map(|c| roses_fx::bmodule::model_index(image, c).unwrap_or(0))
 }
 
 /// The worker loop: tick the copy, running each effect call live.
@@ -328,8 +384,9 @@ fn work(mut battle: ArenaBattle, inputs: EffectInputs, tx: SyncSender<TickResult
     if let Some(card) = std::env::var("ROSES_ARENA_EFFECT_CARD").ok().and_then(|v| v.parse::<u16>().ok()) {
         cards[0] = card;
     }
-    let models = models_of(&inputs.program.1, cards);
-    let mut effects: [Option<AttackEffect>; 2] = [None, None];
+    let image = roses_fx::bus::Image::from_elf(&inputs.program.1).map(Arc::new);
+    let models = models_of(image.as_deref(), cards);
+    let mut effects: [Option<Effect>; 2] = [None, None];
     let mut dead = [false; 2];
     let mut tick = 0u32;
     let mut generation = 0u32;
@@ -340,7 +397,7 @@ fn work(mut battle: ArenaBattle, inputs: EffectInputs, tx: SyncSender<TickResult
             pending = Some(p);
         }
         // The skip press: the real battle pressed it after update `at` - 1;
-        // rewind to that point when ahead (journals newest first), then skip
+        // rewind to that point when ahead (checkpoints newest first), then skip
         // there as the real battle did.
         if let Some((g, at)) = pending.filter(|p| p.1 <= tick) {
             pending = None;
@@ -355,11 +412,10 @@ fn work(mut battle: ArenaBattle, inputs: EffectInputs, tx: SyncSender<TickResult
                     for (role, f) in fx.into_iter().enumerate() {
                         if !present[role] {
                             effects[role] = None;
-                        } else if let (Some(e), Some((calls, finished, regs, journal))) = (effects[role].as_mut(), f) {
-                            e.cpu.journal_undo(journal);
-                            e.cpu.set_regs(&regs);
-                            e.calls = calls;
-                            e.finished = finished;
+                        } else {
+                            if let (Some(e), Some(p)) = (effects[role].as_mut(), f) {
+                                *e = p;
+                            }
                         }
                     }
                     dead = cd;
@@ -377,63 +433,55 @@ fn work(mut battle: ArenaBattle, inputs: EffectInputs, tx: SyncSender<TickResult
         if battle.done() || stop.load(Ordering::Relaxed) {
             break;
         }
-        // This update's checkpoint (journals start at each effect's load).
-        let mut checkpoint = Checkpoint {
+        // This update's checkpoint.
+        let checkpoint = Checkpoint {
             tick,
             battle: battle.clone(),
             present: [effects[0].is_some(), effects[1].is_some()],
             dead,
-            fx: [None, None],
+            fx: effects.clone(),
         };
-        for role in 0..2 {
-            if let Some(e) = effects[role].as_mut() {
-                checkpoint.fx[role] = Some((e.calls, e.finished, e.cpu.regs(), roses_ee::Journal::default()));
-            }
-        }
         let mut calls = Vec::new();
         battle.tick_live(&mut |b: &ArenaBattle, role: usize, call: usize, shared: &mut FxShared| {
             let cached = b.cached_return(role, call);
             if call == 0 {
-                let handles = if role == 0 { [0x101, 0x001] } else { [0x001, 0x101] };
+                let handles = [ROLE_HANDLES[role], ROLE_HANDLES[1 - role]];
                 let textures = EffectTextures { texeff: inputs.texeff.clone(), own: inputs.own[role].clone(), other: Vec::new() };
-                effects[role] = match AttackEffect::load(&inputs.program.1, &inputs.program.0, cards[role], handles, &textures) {
-                    Ok(Some(mut e)) => {
-                        // ROSES_BMODULE_NO_JOURNAL=1 (research: cost): no
-                        // rewind, a skip press then stops the worker.
-                        if std::env::var_os("ROSES_BMODULE_NO_JOURNAL").is_none() {
-                            e.cpu.journal_start();
-                        }
-                        Some(e)
-                    }
-                    Ok(None) => None,
+                let port = caught(format_args!("card {} load", cards[role]), || image.clone().and_then(|i| roses_fx::bmodule::BPort::load(i, &inputs.program.0, cards[role], handles, &textures)));
+                effects[role] = match port {
                     Err(e) => {
                         stats.lock().unwrap_or_else(|e| e.into_inner()).stops.push(format!("card {}: {e}", cards[role]));
                         None
                     }
+                    Ok(p) => p.map(Box::new),
                 };
                 dead[role] = effects[role].is_none();
             }
             if dead[role] {
                 return cached;
             }
-            let fx = effects[role].as_mut()?;
-            let world = BattleWorld::new(b, role, [models[role], models[1 - role]]);
+            // (Gone with `dead` clear: stopped, then a rewind to before it.)
+            let Some(fx) = effects[role].as_mut() else {
+                return cached;
+            };
+            let mut world = BattleWorld::new(b, role, [models[role], models[1 - role]]);
+            world.state = inputs.battle.filter(|_| OUTCOME_CARDS.contains(&cards[role]));
             // The module draws from the game's one rand state [emu emu_rand.py].
-            fx.set_rand_state(shared.rand);
+            roses_fx::EffectPort::set_rand_state(fx.as_mut(), shared.rand);
             let start = Instant::now();
-            match fx.update(&world) {
+            match caught(format_args!("card {} call {call}", cards[role]), || roses_fx::EffectPort::update(fx.as_mut(), &world)) {
                 Ok(u) => {
                     let micros = start.elapsed().as_micros() as u64;
-                    shared.rand = fx.rand_state();
+                    shared.rand = roses_fx::EffectPort::rand_state(fx.as_mut());
                     // obj+0x20D bit 0 as the module left it (module roles:
                     // 0 = the attacker).
                     for (r, f) in u.flags_20d.iter().enumerate() {
                         shared.frozen[if r == 0 { role } else { 1 - role }] = f & 1 != 0;
                     }
-                    let order = roses_ee::bmodule::draw_order(&u.prims, &u.layers);
+                    let order = roses_fx::types::draw_order(&u.prims, &u.layers);
                     // The first frame copy's place in that order: what comes
                     // after is not in the copy [F 0x207FC0].
-                    let copy_at = u.frame_copies.first().map(|c| roses_ee::bmodule::copy_position(&u.prims, &u.layers, c));
+                    let copy_at = u.frame_copies.first().map(|c| roses_fx::types::copy_position(&u.prims, &u.layers, c));
                     let mut unit_rt = [false; 2];
                     let mut rt_vp = [None; 2];
                     for r in &u.unit_renders {
@@ -445,7 +493,7 @@ fn work(mut battle: ArenaBattle, inputs: EffectInputs, tx: SyncSender<TickResult
                     // A target sampled without a render this update keeps
                     // its unit drawn there [H].
                     for p in &u.prims {
-                        if let Some(roses_ee::bmodule::TextureKey::UnitRt(r)) = p.texture {
+                        if let Some(roses_fx::types::TextureKey::UnitRt(r)) = p.texture {
                             unit_rt[usize::from(r & 1)] = true;
                         }
                     }
@@ -496,14 +544,6 @@ fn work(mut battle: ArenaBattle, inputs: EffectInputs, tx: SyncSender<TickResult
                     *s.boundary.entry(b.1).or_insert(0) += 1;
                 }
                 s.missing_textures.extend(c.missing_textures.iter().copied());
-            }
-        }
-        for role in 0..2 {
-            if let (Some(e), Some(fx)) = (effects[role].as_mut(), checkpoint.fx[role].as_mut()) {
-                fx.3 = e.cpu.journal_take().unwrap_or_default();
-            } else if let Some(e) = effects[role].as_mut() {
-                // Loaded in this update: its journal starts now.
-                let _ = e.cpu.journal_take();
             }
         }
         checkpoints.push_back(checkpoint);
@@ -564,6 +604,14 @@ impl EffectWorker {
         if result.is_none() && battle.effect_task().is_some() {
             self.stats.lock().unwrap_or_else(|e| e.into_inner()).late += 1;
         }
+        // The game goes on after a worker's port panic; a test does not.
+        #[cfg(test)]
+        {
+            let stops = self.stats.lock().unwrap_or_else(|e| e.into_inner()).stops.clone();
+            if let Some(e) = stops.iter().find(|s| s.contains(PANICKED)) {
+                panic!("{e}");
+            }
+        }
         let calls = result.map(|r| r.calls).unwrap_or_default();
         battle.tick_live(&mut |b: &ArenaBattle, role: usize, call: usize, shared: &mut FxShared| {
             let c = calls.iter().find(|c| c.role == role && c.call == call);
@@ -602,7 +650,7 @@ impl EffectWorker {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FxState {
     /// The shim's texture, or `None` untextured.
-    pub texture: Option<roses_ee::bmodule::TextureKey>,
+    pub texture: Option<roses_fx::types::TextureKey>,
     /// Textured from the frame buffer (TEX0 TBP0 0 / 0x800,
     /// `TextureKey::Frame`).
     pub frame: bool,
@@ -756,20 +804,20 @@ pub fn fx_batches(prims: &[GsPrim], size: &dyn Fn(&FxState, &GsPrim) -> Option<(
         let b = &mut batches[k];
         let (w, h) = if p.textured() { size(&state, p).unwrap_or((1.0, 1.0)) } else { (1.0, 1.0) };
         let (tw, th) = p.texture_size().map_or((1.0, 1.0), |(a, b)| (a as f32, b as f32));
-        let uv = |v: &roses_ee::bmodule::GsVertex| -> [f32; 2] {
+        let uv = |v: &roses_fx::types::GsVertex| -> [f32; 2] {
             if p.uv_texels() {
                 [v.uv[0] / w, v.uv[1] / h]
             } else {
                 [v.uv[0] * tw / w, v.uv[1] * th / h]
             }
         };
-        let q = |v: &roses_ee::bmodule::GsVertex| -> [f32; 2] {
+        let q = |v: &roses_fx::types::GsVertex| -> [f32; 2] {
             let lod = if v.q != 0.0 { v.q } else { 1.0 };
             [if p.uv_texels() { 1.0 } else { lod }, lod]
         };
         let vs = &p.vertices;
         let flat = !p.gouraud();
-        let depth = |v: &roses_ee::bmodule::GsVertex| ((f64::from(v.z) + 2048.25) / 16_779_264.0) as f32;
+        let depth = |v: &roses_fx::types::GsVertex| ((f64::from(v.z) + 2048.25) / 16_779_264.0) as f32;
         let tri = |b: &mut FxBatch, i: [usize; 3]| {
             let last = vs[i[2]].rgba;
             for j in i {
@@ -830,12 +878,12 @@ pub fn fx_batches(prims: &[GsPrim], size: &dyn Fn(&FxState, &GsPrim) -> Option<(
                 for s in 0..vs.len() / 2 {
                     let (a, c) = (&vs[2 * s], &vs[2 * s + 1]);
                     // Sprite corners take S / Q of their own vertex.
-                    let div = |v: &roses_ee::bmodule::GsVertex| {
+                    let div = |v: &roses_fx::types::GsVertex| {
                         let (t, k) = (uv(v), q(v)[0]);
                         [t[0] / k, t[1] / k]
                     };
                     let (ua, uc) = (div(a), div(c));
-                    let corner = |x: &roses_ee::bmodule::GsVertex, y: &roses_ee::bmodule::GsVertex, u: [f32; 2], v: [f32; 2]| ([x.x, y.y], [u[0], v[1]]);
+                    let corner = |x: &roses_fx::types::GsVertex, y: &roses_fx::types::GsVertex, u: [f32; 2], v: [f32; 2]| ([x.x, y.y], [u[0], v[1]]);
                     let quad = [corner(a, a, ua, ua), corner(c, a, uc, ua), corner(a, c, ua, uc), corner(c, c, uc, uc)];
                     // A sprite's Z (and Q) is its second vertex's [GS].
                     let dc = depth(c);
@@ -859,7 +907,24 @@ pub fn fx_batches(prims: &[GsPrim], size: &dyn Fn(&FxState, &GsPrim) -> Option<(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use roses_ee::bmodule::{GsVertex, TextureKey};
+    use roses_fx::types::{GsVertex, TextureKey};
+
+    /// A port's panic comes back as an `Err` with its message.
+    #[test]
+    fn the_net_turns_a_port_panic_into_an_err() {
+        assert_eq!(caught("test", || 5), Ok(5));
+        let e = caught("test", || -> i32 { panic!("unported draw case {:#x}", 7) }).unwrap_err();
+        assert!(e.contains(PANICKED) && e.contains("unported draw case 0x7"), "{e}");
+        let e = caught("test", || -> i32 { panic!("static text") }).unwrap_err();
+        assert!(e.contains("static text"), "{e}");
+    }
+
+    /// The net never hides a port's panic from a test.
+    #[test]
+    #[should_panic(expected = "unported task step")]
+    fn a_port_panic_still_fails_a_test() {
+        let _ = guarded("test", || -> i32 { panic!("unported task step") });
+    }
 
     fn v(x: f32, y: f32, rgba: [u8; 4], uv: [f32; 2]) -> GsVertex {
         GsVertex { x, y, z: 1, rgba, q: 1.0, uv }
@@ -1071,8 +1136,23 @@ pub(crate) mod private_tests {
         let tex = cards.map(|c| crate::duel_models::effect_textures(&models, c).unwrap());
         let own = tex.clone().map(|t| t.into_iter().map(|t| t.map(|t| t.rh2)).collect());
         let own_images = tex.map(|t| Arc::new(t.into_iter().map(|t| t.and_then(|t| t.image)).collect()));
-        let inputs = EffectInputs { program: arena.effects.clone().unwrap(), texeff: texeff_records(&texeff), own, own_images };
+        let inputs = EffectInputs { program: arena.effects.clone().unwrap(), texeff: texeff_records(&texeff), own, own_images, battle: None };
         (setup, inputs)
+    }
+
+    /// `models_of`'s table read against the interpreter's, every card and
+    /// past the end. Needs ROSES_ARENA_MANIFEST.
+    #[test]
+    #[ignore = "needs private imports"]
+    fn model_index_equals_the_interpreters() {
+        let arena = crate::duel_arena::load_arena(std::path::Path::new(&std::env::var("ROSES_ARENA_MANIFEST").unwrap())).unwrap();
+        let exe = &arena.effects.as_ref().unwrap().1;
+        let image = roses_fx::bus::Image::from_elf(exe).unwrap();
+        let mut cpu = roses_ee::Cpu::new();
+        cpu.load_elf(exe).unwrap();
+        for card in 0..700u16 {
+            assert_eq!(roses_fx::bmodule::model_index(&image, card), roses_ee::effects::model_index(&mut cpu, card), "card {card}");
+        }
     }
 
     /// The footage battle with the effects run live on the worker: the same
@@ -1132,8 +1212,52 @@ pub(crate) mod private_tests {
         assert!(s.prims > 100_000);
     }
 
+    /// The battle's answer reaches the nine outcome records on the worker,
+    /// on one arena path (the same `Outcome`, only the state differs): a
+    /// target that survives is left alone, a destroyed one is faded / tinted
+    /// exactly as without a state (the zero image's answer 1). Another card
+    /// ignores the state. Needs ROSES_MODELS_MANIFEST, ROSES_ARENA_MANIFEST,
+    /// ROSES_TEXEFF.
+    #[test]
+    #[ignore = "needs private imports"]
+    fn real_battle_answer_reaches_the_outcome_records() {
+        let unit = |attack, defence| BattleUnit { attack, defence, defence_position: false };
+        let survives = battle_state([unit(1000, 900), unit(1800, 1200)], true, (3, 3));
+        let destroyed = battle_state([unit(2400, 900), unit(1800, 1200)], true, (3, 3));
+        assert_eq!(survives.outcome(0x101, 0x001), 0);
+        assert_eq!(destroyed.outcome(0x101, 0x001), 1);
+        let run = |card: u16, state: Option<BattleState>| -> Vec<UnitWrites> {
+            let (setup, mut inputs) = footage_inputs([card, 370]);
+            inputs.battle = state;
+            let battle = ArenaBattle::new(setup.units, Outcome::from_battle(1, 2000, 1000), setup.stage_end, 1);
+            let mut real = battle.clone();
+            let mut worker = EffectWorker::start(&battle, inputs);
+            let mut writes = Vec::new();
+            let mut n = 0;
+            while !real.done() && n < 5000 {
+                if let Some(d) = worker.tick(&mut real, Duration::from_secs(5)) {
+                    if d.card == card {
+                        writes.push(d.unit_writes[1]);
+                    }
+                }
+                n += 1;
+            }
+            assert!(worker.stats.lock().unwrap().stops.is_empty(), "card {card}");
+            assert!(!writes.is_empty(), "card {card}");
+            writes
+        };
+        for card in OUTCOME_CARDS {
+            let (none, lives, dies) = (run(card, None), run(card, Some(survives)), run(card, Some(destroyed)));
+            let apart = lives.iter().zip(&dies).position(|(a, b)| a != b);
+            eprintln!("card {card}: {} updates, survivor apart from update {apart:?}; last target writes {:?} / {:?}", dies.len(), lives.last().unwrap(), dies.last().unwrap());
+            assert_eq!(dies, none, "card {card}: answer 1 as without a state");
+            assert!(apart.is_some(), "card {card}: the surviving target took the destroyed branch");
+        }
+        assert_eq!(run(406, None), run(406, Some(survives)));
+    }
+
     /// A skip press during B220 after the worker ran ahead: the worker
-    /// rewinds (page journals) and its draws and returns through the exit
+    /// rewinds (checkpoint copies) and its draws and returns through the exit
     /// equal a worker that skipped there without running ahead.
     #[test]
     #[ignore = "needs private imports"]
@@ -1295,8 +1419,9 @@ pub(crate) mod private_tests {
 mod private_sweep {
     use super::private_tests::footage_inputs;
     use super::*;
+    use roses_ee::bmodule::AttackEffect;
     use crate::duel_arena_battle::Outcome;
-    use roses_ee::bmodule::OBJECT_RECORD;
+    use roses_fx::world::OBJECT_RECORD;
     use std::collections::{BTreeMap, BTreeSet};
 
     /// Object fields the mirror writes (start, end) by offset.
@@ -1619,7 +1744,7 @@ mod private_sweep {
                                 }
                             }
                             row.layer_prims += usize::from(p.layer.is_some());
-                            row.unit_rt_prims += usize::from(matches!(p.texture, Some(roses_ee::bmodule::TextureKey::UnitRt(_))));
+                            row.unit_rt_prims += usize::from(matches!(p.texture, Some(roses_fx::types::TextureKey::UnitRt(_))));
                             if p.buffered {
                                 row.buffered_prims += 1;
                             }

@@ -1,4 +1,4 @@
-"""Audit a friends package before it is zipped.
+"""Audit a release package before it is zipped.
 
     python scripts/release/audit.py <package-folder> [--iso <your.iso>] [--samples N] [--with-forbidden-memories]
 
@@ -17,7 +17,7 @@ from pathlib import Path
 
 EXES = {"roses-launcher.exe", "roses.exe", "roses-bevy-scene.exe"}
 TEXTS = {"README.txt", "KNOWN-ISSUES.txt"}
-# Optional: the friends server's address and certificate pin
+# Optional: the online server's address and certificate pin
 # (build-release.ps1 -OnlineServer/-OnlinePin), checked below.
 OPTIONAL = {"online.json"}
 # The launcher's brand and links (scripts/release/platform.json).

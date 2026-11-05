@@ -1,5 +1,5 @@
 //! CMODULE c537 (0x219), Riryoku's equip-pair module (summon chain, handler
-//! 0x272560), as specified in `claude-activate/NEWLY-ALLOWED.md` section 14
+//! 0x272560), as specified in the project notes section 14
 //! [F code; emu: the reference model `tools/mf_c537_model.py` equals the
 //! interpreter's primitives (one GS step) in five runs]. From u 16, on the
 //! screen-anchored node at view (-101, 8) on the depth-800 plane, Z max, OT

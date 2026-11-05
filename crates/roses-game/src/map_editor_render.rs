@@ -9,7 +9,7 @@
 //! original: the memory card is written by Custom Duel's Save row), Circle
 //! leaves without saving; both return to Custom Duel's Edit Map row without
 //! init −1 (the mode switch calls no init for 0xD's pop) and keep the
-//! music. Notes: `work/research/modes/map-editor/NOTES.md`.
+//! music. Notes: the project notes.
 use bevy::{
     input::{ButtonState, keyboard::{KeyboardFocusLost, KeyboardInput}},
     prelude::*,

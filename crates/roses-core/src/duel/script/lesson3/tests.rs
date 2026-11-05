@@ -1366,7 +1366,7 @@ fn destiny_draw_without_the_rows_is_refused_at_the_summon() {
 /// Private checks against the original: `ROSES_TEST_CATALOGUE` = the
 /// imported `catalogue.json`, `ROSES_TEST_ELF_PATH` = the PAL executable
 /// (deck records 0x15/0x16 from its static deck table, the Destiny rows
-/// from 0x2B7AF0), `ROSES_TEST_TUTORIAL` = the `claude-tutorial` folder
+/// from 0x2B7AF0), `ROSES_TEST_TUTORIAL` = the the project notes folder
 /// (`emu-34.txt`, `states-34.txt`).
 mod private {
     use super::*;

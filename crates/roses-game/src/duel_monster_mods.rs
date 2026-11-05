@@ -1,5 +1,5 @@
 //! The monster effects' modules, ported from the interpreter-matched models
-//! in `claude-activate/tools` [F code; emu: every vertex of the original's
+//! in the project notes [F code; emu: every vertex of the original's
 //! run, <= 0.13 px]:
 //! - c529 (0x211, "Power increase", 30 U; `e2_c529_model.py`,
 //!   EFFECT-MODULES-2.md 4): blue lines flowing into the target, a pulsing

@@ -1,5 +1,5 @@
 //! CMODULE c022 (0x16), Magical Neutralizing Force Field (event 0x1C,
-//! handler 0x25F2F0), as specified in `claude-activate/C022-FORCE-FIELD.md`
+//! handler 0x25F2F0), as specified in the project notes
 //! [F code; emu: the reference model `tools/mf_c022_model.py` equals the
 //! interpreter's primitives to 0.0625 px under two cameras]. World-anchored at
 //! the world origin (the board centre), all additive (ALPHA 0x48):
@@ -34,7 +34,7 @@ pub const SE_U: u32 = 1;
 pub const SLOTS: usize = 193;
 /// Ring spawn updates (spawner 0x1E00080).
 pub const RING_U: [u32; 4] = [1, 6, 13, 20];
-/// TEXEFF sheet size (`claude-units/texeff/015.png`).
+/// TEXEFF sheet size (the project notes).
 const SHEET: f32 = 256.0;
 
 // ---------------------------------------------------------------- shared helpers

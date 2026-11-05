@@ -1,5 +1,5 @@
 //! CMODULE c533 (0x215), Solomon's Lawbook (event 0x21, handler 0x260760),
-//! as specified in `claude-activate/NEWLY-ALLOWED.md` section 13 [F code;
+//! as specified in the project notes section 13 [F code;
 //! emu: the reference model `tools/mf_c533_model.py` equals the
 //! interpreter's primitives to 0.0625 px in five runs, light and rand counts
 //! included]. Screen-anchored: both nodes sit at view (0, 0) on the

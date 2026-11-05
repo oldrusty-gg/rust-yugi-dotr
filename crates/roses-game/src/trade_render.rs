@@ -7,7 +7,7 @@
 //! 512×512 frame (the deck editor's present shader). YES with every copy
 //! moved starts op 5 (both cards written, each with its own SAVE); the
 //! mode then pops to the title, as does Cancel's YES or the refusal's
-//! press. Notes: `work/research/modes/two-player/NOTES.md`.
+//! press. Notes: the project notes.
 //!
 //! The card detail pane (DTL, 0x1BE6E0) is `card_detail`'s; its picture is
 //! the import's PICTURE.MRG record (duel-end import), else the pane shows

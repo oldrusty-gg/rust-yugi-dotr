@@ -1,6 +1,6 @@
 //! Extend the post-name import with the story from Simon's practice question to
 //! the campaign map (PAL SLES_515.79; private research
-//! `story/claude-to-first-duel/FLOW.md`, "Story to the map (Bevy)").
+//! `story/the project notes, "Story to the map (Bevy)").
 //!
 //! Order: practice choice "No" → 10060 (Simon) → 10070 (Simon) → starter deck
 //! select → 10071 (Simon) → 10080 (Seto arrives) → 10090 → side choice →

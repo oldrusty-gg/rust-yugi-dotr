@@ -1,7 +1,7 @@
 //! The low-LP special draw ("Destiny Draw") for every side: arming at the
 //! side's turn start (0x270800 / 0x270900) and the special card as the last
 //! card of the summon refill (state 0x3E event 0x72, refill 0x1D8F90, pick
-//! 0x270FC0) (claude-effects/SPECIAL-DRAW.md §2–4, next/ABILITY-3-CPU.md).
+//! 0x270FC0) (the project notes §2–4, next/ABILITY-3-CPU.md).
 //! The pick and the weights are shared with the practice scripts
 //! (`script::destiny`); the card rows of 0x2B7AF0 are supplied by the duel's
 //! creator ([`Duel::set_destiny_rows`], from

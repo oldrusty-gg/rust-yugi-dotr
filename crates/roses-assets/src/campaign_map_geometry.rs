@@ -15,7 +15,7 @@
 //! Raw strips, vertex lanes, materials and GS registers are preserved;
 //! placement, lighting, blending, the node sink/rise animation and the camera
 //! are the renderer's job and are traced in the private campaign-map research
-//! (`story/claude-campaign-map/MAP.md`), not claimed here. Slot roles live
+//! (`story/the project notes), not claimed here. Slot roles live
 //! with the map model, not in this decoder.
 use crate::story_geometry::{region, wide, word, words, Section, StoryVertex};
 use crate::{Error, OpeningTextureRecord, Result, PAL_MODEL_ARCHIVE_SHA256, PROFILE_ID};

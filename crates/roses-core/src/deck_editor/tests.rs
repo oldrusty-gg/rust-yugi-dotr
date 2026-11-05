@@ -930,7 +930,7 @@ fn delete_trunk_copy_clears_the_slot() {
 
 // ---------------------------------------------------------------------------
 // Private fixtures: the game's own code driven in the EE interpreter
-// (`work/research/modes/claude-deck-editor/tools/fixtures_deck.py`).
+// (the project notes).
 
 mod private {
     use super::*;

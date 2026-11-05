@@ -610,7 +610,7 @@ fn open_pal(path: &Path) -> Result<(Disc, roses_disc::DiscReport)> {
     let mut disc = Disc::open(path)?;
     let report = disc.inspect()?;
     if report.identification.status != roses_disc::IdentificationStatus::KnownRetailCandidate {
-        return Err("this asset importer supports only the fingerprinted SLES_515.79 PAL image; use inspect for other images".into());
+        return Err("This disc image doesn't match the supported PAL release (SLES_515.79). Modified or other-region images can't be imported.".into());
     }
     Ok((disc, report))
 }

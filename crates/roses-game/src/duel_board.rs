@@ -4,7 +4,7 @@
 //! geometry JSON, GS-byte PNG textures), hash-checked on load. This module
 //! places the original models with the traced rules and runs the original
 //! orbit camera. Sources are PAL EE addresses from the private board research
-//! (`work/research/duel/claude-screen/board/NOTES.md`):
+//! (the project notes):
 //!
 //! - cell (c, r) origin = ((c-3)*50, -35 + h*35/128, (r-3)*50), terrain object
 //!   rotation Y 0x8000 plus the model's node-zero Y word (0x1AF4C4, 0x1E2370);

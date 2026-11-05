@@ -1,5 +1,5 @@
 //! CMODULE c502 (0x1F6), field magic's terrain change on one cell, as
-//! traced in `claude-activate/EFFECT-MODULES-2.md` 1 [F code; emu: the model
+//! traced in the project notes 1 [F code; emu: the model
 //! matched the interpreter (Mountain, Dark, Toon) to 0.062 px]:
 //! - a glowing frame round the 48 x 48 tile (black at radius 28, the
 //!   terrain's colour at 24), alpha min(255, 16 (u - 1)), and from u 17 walls

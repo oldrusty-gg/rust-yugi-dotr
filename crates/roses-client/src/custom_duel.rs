@@ -1,7 +1,7 @@
 //! Custom Duel (title mode 9, "CUSTOM VS"): the set-up screen's model
 //! (Claude, 5 Oct 2026). Bevy-free; the drawing is
 //! `roses_game::custom_duel_screen`. Notes, disassembly and
-//! interpreter runs: `work/research/modes/custom-duel/NOTES.md`.
+//! interpreter runs: the project notes.
 //!
 //! Entry [F 0x1AD050.., emu]: the title's Custom Duel runs memory-card op 3
 //! (`memory_card::CardOp::CustomDuelLoad`: slot 1 loaded, slot 2 checked);
@@ -35,7 +35,7 @@
 //! open), the duel words are set again from the committed LPs.
 //!
 //! Two players (selector 0: MEMORY CARD slot 2 holds a save) run player
-//! 1's update on pad 2 (`work/research/modes/two-player/NOTES.md`).
+//! 1's update on pad 2 (the project notes).
 //! Edit Map (only with the both-routes mark) is an event the frontend turns
 //! into the map editor (mode 0xD, `crate::map_editor`) on own map
 //! (0xA9C08C + 2) % 0xA9C08D of the pad side's block.

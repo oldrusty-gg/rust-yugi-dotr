@@ -8,7 +8,7 @@
 //! (`roses_client::duel_hud`) into a premultiplied RGBA layer.
 //!
 //! Layout facts are from software-GS dumps of saved original states
-//! (`work/research/duel/claude-tutorial-ui/`, tags as in
+//! (the project notes, tags as in
 //! `TUTORIAL.md`: [O] observed, [H] hypothesis):
 //! - Window (189-n57: page 3710 over the HUD; 005-t5: page 4092, HUD
 //!   hidden): the text is one bilinear sprite of the 4-bit text canvas,

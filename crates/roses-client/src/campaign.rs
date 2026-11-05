@@ -1,6 +1,6 @@
 //! Campaign state chosen during the opening (PAL SLES_515.79), kept so a later
 //! step can start the first campaign duel with it. Source facts (see the
-//! private research `story/claude-to-first-duel/FLOW.md`):
+//! private research `story/the project notes):
 //!
 //! - Name commit 0x224890 stores twelve codes at 0x299214; slots after the
 //!   entered name keep the editor's unused selection (page 0, row 5, column 0,

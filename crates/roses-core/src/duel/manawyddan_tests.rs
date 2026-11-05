@@ -2,7 +2,7 @@
 //! Elimination 720 (magic type 4 / hi 0, default id branch, event 0x15) and
 //! Dark Elf 79 (battle pre-pass type 0xD), Solomon's Lawbook 747 (magic
 //! type 0x26)
-//! (claude-effects/MANAWYDDAN-812-720-79.md; emu cases WR, E). Synthetic
+//! (the project notes; emu cases WR, E). Synthetic
 //! cards shaped like the originals; the Eliminations keep their real ids
 //! because the builder dispatches on the id.
 

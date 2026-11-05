@@ -1,7 +1,7 @@
 //! Campaign map (Lancastrian route): the first steps from "Choose a
 //! destination" to the Weevil duel and back, as a frame-stepped model without
 //! any renderer. Source facts (PAL SLES_515.79, private research
-//! `story/claude-campaign-map/MAP.md`, tags [F] code/data, [emu] the game's
+//! `story/the project notes, tags [F] code/data, [emu] the game's
 //! own code run frame by frame, [H] hypothesis):
 //!
 //! - Node table 0x297F80 (22 × 0x34) and path table 0x298400 (2 sides × 16 ×
@@ -37,7 +37,7 @@
 //!   finished path raises its end node over 64 frames to state 1.
 //!
 //! Frame numbers of the model match the emulator logs in
-//! `story/claude-campaign-map/logs/` (hover-622, pre-duel-652, post-win-767,
+//! `story/the project notes (hover-622, pre-duel-652, post-win-767,
 //! post-loss-767, rematch-after-loss); the in-frame order of the updaters and
 //! the four-frame dot start are reconstructed from those logs [H].
 //!
@@ -2322,7 +2322,7 @@ impl MapModel {
                         // after a push (the walk ends at Dover) but
                         // `push_check` never fires (a duel against the
                         // stale SAVE opponent was requested at the walk's
-                        // end; claude-route-e2e PLAYTHROUGH-2026-10-06).
+                        // end; the project notes PLAYTHROUGH-2026-10-06).
                         self.travel = 4;
                     }
                 }

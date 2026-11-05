@@ -11,7 +11,11 @@
 //!   (`roses_core::duel::multi::computer`);
 //! - the match never pauses: a disconnected player's turns are skipped,
 //!   and after the reconnect grace (or three expired turns in a row) the
-//!   player is knocked out (`Duel::forfeit_with`), and play goes on;
+//!   player is knocked out (`Duel::forfeit_with`), and play goes on; with
+//!   nobody left to play (every living seat a player who is away) the turns
+//!   wait for a return or the grace instead of racing to the round limit,
+//!   and once no player is left at all the computers leave too, so a match
+//!   of computers only never runs on with nobody there;
 //! - the turn clock is the room's (`RoomSettings::turn_seconds`);
 //! - presses are relayed to every other seat;
 //! - spectators get every revision at once (no delay).
@@ -181,6 +185,9 @@ pub struct MultiMatch {
     computer_stalls: u32,
     spectator_out: Vec<ServerMessage>,
     watchers: u16,
+    /// What `advance` produced for a handshake that was then refused: the
+    /// next `advance` hands it on, so no seat misses a revision.
+    undelivered: Outbox,
 }
 
 fn rejection(e: DuelError) -> Rejection {
@@ -274,6 +281,7 @@ impl MultiMatch {
             computer_stalls: 0,
             spectator_out: Vec::new(),
             watchers: 0,
+            undelivered: Vec::new(),
         })
     }
 
@@ -403,33 +411,13 @@ impl MultiMatch {
     ) -> Result<(u8, Outbox), Refusal> {
         compat.check(&self.compat).map_err(|detail| Refusal::Incompatible { detail })?;
         let mut out = self.advance(now);
-        let seat = match join {
-            Join::Seat { seat: Some(s) } => {
-                if self.ended.is_some() {
-                    return Err(Refusal::MatchOver);
-                }
-                let st = self.seats.get(usize::from(*s)).ok_or(Refusal::SeatTaken)?;
-                if st.joined || st.info.computer {
-                    return Err(Refusal::SeatTaken);
-                }
-                if self.duel.is_some() {
-                    // A seat the server gave to a computer at the start.
-                    return Err(Refusal::MatchOver);
-                }
-                let deck = deck.ok_or(Refusal::DeckRequired)?;
-                check_deck(deck, &self.cards).map_err(|problem| Refusal::IllegalDeck { problem })?;
-                let st = &mut self.seats[usize::from(*s)];
-                st.joined = true;
-                st.deck = Some(deck.clone());
-                *s
+        let seat = match self.take_seat(join, deck) {
+            Ok(seat) => seat,
+            Err(refusal) => {
+                // The clock moved for everyone else: they still get it.
+                self.undelivered = out;
+                return Err(refusal);
             }
-            Join::Resume { token } => (0..self.seats.len() as u8)
-                .find(|&s| {
-                    let st = &self.seats[usize::from(s)];
-                    st.joined && !st.info.computer && same_token(&st.token, token)
-                })
-                .ok_or(Refusal::BadToken)?,
-            Join::Seat { seat: None } | Join::Ticket { .. } | Join::Watch { .. } => return Err(Refusal::BadToken),
         };
         let st = &mut self.seats[usize::from(seat)];
         st.connected = true;
@@ -470,6 +458,38 @@ impl MultiMatch {
             out.push((seat, ServerMessage::Watchers { count: self.watchers }));
         }
         Ok((seat, out))
+    }
+
+    /// The seat a handshake takes or resumes.
+    fn take_seat(&mut self, join: &Join, deck: Option<&DeckSubmission>) -> Result<u8, Refusal> {
+        match join {
+            Join::Seat { seat: Some(s) } => {
+                if self.ended.is_some() {
+                    return Err(Refusal::MatchOver);
+                }
+                let st = self.seats.get(usize::from(*s)).ok_or(Refusal::SeatTaken)?;
+                if st.joined || st.info.computer {
+                    return Err(Refusal::SeatTaken);
+                }
+                if self.duel.is_some() {
+                    // A seat the server gave to a computer at the start.
+                    return Err(Refusal::MatchOver);
+                }
+                let deck = deck.ok_or(Refusal::DeckRequired)?;
+                check_deck(deck, &self.cards).map_err(|problem| Refusal::IllegalDeck { problem })?;
+                let st = &mut self.seats[usize::from(*s)];
+                st.joined = true;
+                st.deck = Some(deck.clone());
+                Ok(*s)
+            }
+            Join::Resume { token } => (0..self.seats.len() as u8)
+                .find(|&s| {
+                    let st = &self.seats[usize::from(s)];
+                    st.joined && !st.info.computer && same_token(&st.token, token)
+                })
+                .ok_or(Refusal::BadToken),
+            Join::Seat { seat: None } | Join::Ticket { .. } | Join::Watch { .. } => Err(Refusal::BadToken),
+        }
     }
 
     /// Seats whose player has not joined get the server's computer (with
@@ -558,24 +578,29 @@ impl MultiMatch {
     fn advance(&mut self, now: u64) -> Outbox {
         let dt = now.saturating_sub(self.now);
         self.now = self.now.max(now);
-        let mut out = Vec::new();
+        let mut out = std::mem::take(&mut self.undelivered);
         if self.duel.is_none() || self.ended.is_some() {
             return out;
         }
-        // Absent players past the grace period are knocked out.
+        // Absent players past the grace period are knocked out (the earlier
+        // departure first, as in a 2-player match).
         let grace = self.policy.reconnect_grace;
-        let gone: Vec<u8> = (0..self.seats.len() as u8)
-            .filter(|&s| {
-                let st = &self.seats[usize::from(s)];
-                st.absent_since.is_some_and(|since| self.now.saturating_sub(since) >= grace)
-                    && self.duel.as_ref().is_some_and(|d| d.alive(s))
+        let mut gone: Vec<(u64, u8)> = (0..self.seats.len() as u8)
+            .filter_map(|s| {
+                let since = self.seats[usize::from(s)].absent_since?;
+                (self.now.saturating_sub(since) >= grace && self.duel.as_ref().is_some_and(|d| d.alive(s))).then_some((since, s))
             })
             .collect();
-        for s in gone {
+        gone.sort();
+        for (_, s) in gone {
             self.forfeit(s, Actor::Server, Cause::Abandoned, &mut out);
             if self.ended.is_some() {
                 return out;
             }
+        }
+        if self.only_computers_remain() {
+            self.computers_leave(&mut out);
+            return out;
         }
         self.turn_clock += dt;
         self.computer_wait += dt;
@@ -598,6 +623,13 @@ impl MultiMatch {
                 continue;
             }
             if !st.connected {
+                if !self.someone_can_play() {
+                    // Everyone still in the match is away (a network cut
+                    // drops them together): the turns wait for a return or
+                    // the grace, and whoever returns gets a full clock.
+                    self.turn_clock = 0;
+                    break;
+                }
                 // A disconnected player's turn is skipped at once.
                 self.end_turn_for(active, Cause::TurnTimeout, &mut out);
                 continue;
@@ -613,8 +645,42 @@ impl MultiMatch {
         out
     }
 
+    /// A seat still in the match that is a computer or a connected player.
+    fn someone_can_play(&self) -> bool {
+        self.duel.as_ref().is_some_and(|d| {
+            self.seats.iter().enumerate().any(|(s, st)| d.alive(s as u8) && (st.info.computer || st.connected))
+        })
+    }
+
+    /// The match had players and none is left: every one is knocked out and
+    /// gone from the screen, so only computers would play on (for up to the
+    /// round limit, with those players kept busy in the lobby).
+    fn only_computers_remain(&self) -> bool {
+        let Some(duel) = self.duel.as_ref() else { return false };
+        let mut humans = self.seats.iter().enumerate().filter(|(_, st)| !st.info.computer).peekable();
+        humans.peek().is_some() && humans.all(|(s, st)| !st.connected && !duel.alive(s as u8))
+    }
+
+    /// End a match of computers only: they leave one by one until one side
+    /// is left, those on a team with a player who left first (a player who
+    /// walked away does not win because of who stayed).
+    fn computers_leave(&mut self, out: &mut Outbox) {
+        let teams_with_players: Vec<u8> = self.seats.iter().filter(|s| !s.info.computer).map(|s| s.info.team).collect();
+        let mut order: Vec<(bool, u8)> =
+            (0..self.seats.len() as u8).map(|s| (!teams_with_players.contains(&self.seats[usize::from(s)].info.team), s)).collect();
+        order.sort();
+        for (_, s) in order {
+            if self.ended.is_some() {
+                return;
+            }
+            if self.duel.as_ref().is_some_and(|d| d.alive(s)) {
+                self.forfeit(s, Actor::Server, Cause::Abandoned, out);
+            }
+        }
+    }
+
     fn computer_step(&mut self, side: u8, out: &mut Outbox) {
-        let duel = self.duel.as_ref().expect("started").clone();
+        let Some(duel) = self.duel.as_ref() else { return };
         let Some(computer) = self.computers[usize::from(side)].as_mut() else { return };
         let command = match &self.computer_tables {
             Some(t) => computer.decide(&duel, &self.cards, t.as_ref()),
@@ -710,13 +776,16 @@ impl MultiMatch {
             self.turn_clock = 0;
             self.computer_wait = 0;
         }
-        self.spectator_out.push(ServerMessage::Update {
-            revision: self.revision,
-            actor,
-            cause,
-            events: spectator_events(&next, Some(side), &events),
-            view: spectator_view(&next),
-        });
+        // Nobody watching: a later spectator starts from a fresh snapshot.
+        if self.watchers > 0 {
+            self.spectator_out.push(ServerMessage::Update {
+                revision: self.revision,
+                actor,
+                cause,
+                events: spectator_events(&next, Some(side), &events),
+                view: spectator_view(&next),
+            });
+        }
         for viewer in self.connected_seats().collect::<Vec<_>>() {
             out.push((
                 viewer,

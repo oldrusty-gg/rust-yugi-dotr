@@ -1,6 +1,6 @@
 //! Private checks: the engine's experience bookkeeping against runs of the
 //! original's own code in the EE interpreter from saved states
-//! (`work/research/duel/claude-end/DUEL-END.md` §2; the in-duel cases
+//! (the project notes §2; the in-duel cases
 //! were run from `757-f2-setup` with every experience value set to 1000, so
 //! the numbers below are plain deltas).
 #[cfg(test)]

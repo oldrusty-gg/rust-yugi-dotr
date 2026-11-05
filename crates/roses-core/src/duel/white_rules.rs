@@ -4,7 +4,7 @@
 //! Drdek 325 (0x23 with lo 0), Ooguchi 575 (0x25) and Mystery Hand 310
 //! (0x3C), Creature Swap 751 (magic 0x25 / hi 0x21) and Binding Chain 386
 //! (entry-2 type 0x17). Private notes:
-//! `claude-effects/WHITE-REFUSALS.md`.
+//! the project notes.
 
 use super::*;
 

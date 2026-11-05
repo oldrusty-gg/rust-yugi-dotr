@@ -9,7 +9,7 @@
 //! are replaced by a signed zero) before an `addss` in the same mode. All 768
 //! captured particle scales of the reference save state reproduce bit-exactly
 //! under this model and under no plain IEEE rounding mode (see
-//! `work/research/story/claude-opening-disc/CLOUDS-START.md`).
+//! the project notes).
 //!
 //! This is emulator behaviour, not proven R5900 hardware behaviour. The
 //! `HostF32` model keeps the host's round-to-nearest arithmetic for comparison.

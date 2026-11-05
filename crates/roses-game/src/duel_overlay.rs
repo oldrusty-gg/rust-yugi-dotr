@@ -765,7 +765,7 @@ mod tests {
     }
 
     /// d63 set: P1 steps rising and sits at 0x8000 (the cursor glow at full)
-    /// [interpreter `claude-padfeel/d63_dpad.py`: 23040 -> 23552 -> .. 32768,
+    /// [interpreter the project notes: 23040 -> 23552 -> .. 32768,
     /// then 32768 while d63 counts down].
     #[test]
     fn glow_hold_keeps_p1_rising_at_the_top() {

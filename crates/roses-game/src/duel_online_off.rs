@@ -76,6 +76,9 @@ impl OnlineLink {
     pub fn watchers(&self) -> u16 {
         match self.never {}
     }
+    pub fn away_note(&self) -> Option<&'static str> {
+        match self.never {}
+    }
 }
 
 /// Leave the input state on the field after a resynchronisation (only an

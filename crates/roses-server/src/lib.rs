@@ -49,3 +49,5 @@ mod spectate_tests;
 mod multi_tests;
 #[cfg(test)]
 mod seed_tests;
+#[cfg(test)]
+mod contain_tests;
