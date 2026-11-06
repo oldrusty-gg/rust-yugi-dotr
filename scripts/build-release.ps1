@@ -2,7 +2,9 @@
 # (roses.exe) and the game (roses-bevy-scene.exe), the game's own shaders,
 # README.txt and KNOWN-ISSUES.txt, and optionally online.json (an online
 # server's address and certificate pin, so players need no setup), in
-# work/release/roses-<date>/ plus a zip beside it.
+# work/release/roses-<date>/ plus a zip beside it, and latest.json (version,
+# zip name, size, SHA-256) for the launcher's Update button: upload it with the
+# zip, and name the GitHub tag exactly -Release, or the button will not appear.
 # No game data, BIOS or research captures go in; scripts/release/audit.py
 # checks that before the zip is written.
 #
@@ -42,6 +44,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
+# The launcher compares this label with the latest release's tag.
+if ($Release -cnotmatch '^\d{4}-\d{2}-\d{2}[a-z]*$') { throw "-Release $Release is not YYYY-MM-DD with optional lower-case letters" }
 # The optional second game: check the stage before the long build.
 $fmFiles = @('fm.exe', 'fm-game.exe', 'assets\present.wgsl', 'games\forbidden-memories.json')
 if ($ForbiddenMemories) {
@@ -153,4 +157,5 @@ if ($ForbiddenMemories -and $FmDisc) {
 $zip = Join-Path $releaseRoot "roses-$Release.zip"
 if (Test-Path $zip) { Remove-Item -Force $zip }
 Compress-Archive -Path $package -DestinationPath $zip -CompressionLevel Optimal
+& (Join-Path $PSScriptRoot 'release\write-latest.ps1') -Zip $zip -Release $Release -Out (Join-Path $releaseRoot 'latest.json')
 Get-Item $package, $zip | Select-Object FullName, @{n = 'MB'; e = { if ($_.PSIsContainer) { [math]::Round((Get-ChildItem $_ -Recurse -File | Measure-Object Length -Sum).Sum / 1MB, 1) } else { [math]::Round($_.Length / 1MB, 1) } } }

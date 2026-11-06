@@ -1239,3 +1239,33 @@ fn an_unreachable_server_reads_as_a_whole_line() {
     assert!(note.chars().count() <= LINE_MAX, "{note}");
     assert_eq!(cut(&note), note);
 }
+
+#[test]
+fn the_lobby_says_so_while_the_server_still_holds_a_match_that_failed_to_join() {
+    use roses_net::lobby::{PlayerEntry, PlayerState};
+    use roses_net::transport::Connection;
+    let (mut m, mut server) = menu_on_fake_lobby("held");
+    let list = |state| LobbyEvent::Players {
+        players: vec![
+            PlayerEntry { name: "Yugi".into(), state },
+            PlayerEntry { name: "Kaiba".into(), state: PlayerState::Idle },
+        ],
+    };
+    m.lobby.as_mut().unwrap().user = Some("Yugi".into());
+    server.send(&list(PlayerState::InMatch)).unwrap();
+    m.update();
+    m.match_failed("could not join");
+    assert_eq!(m.screen, Screen::Lobby);
+    assert!(m.view().info.iter().any(|l| l.contains("still closing")), "{:?}", m.view().info);
+    // Nothing new starts, not even the deck choice before a refusal.
+    m.act(Action::CreateRoom);
+    assert_eq!(m.screen, Screen::Lobby);
+    assert!(m.note.as_deref().is_some_and(|n| n.contains("last match")), "{:?}", m.note);
+    // The server let go: the lobby is the lobby again.
+    server.send(&list(PlayerState::Idle)).unwrap();
+    m.update();
+    assert!(!m.view().info.iter().any(|l| l.contains("still closing")));
+    m.note = None;
+    m.act(Action::CreateRoom);
+    assert!(!m.note.as_deref().is_some_and(|n| n.contains("last match")), "{:?}", m.note);
+}

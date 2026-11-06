@@ -2134,7 +2134,7 @@ fn end_advance(
     for event in events {
         match &event {
             EndEvent::Music { track, arg } => play.audio.push(roses_game::duel_audio::AudioCue::Music {
-                track: u32::from(*track),
+                track: u32::from(roses_game::duel_end_screens::seat_music(*track, active.winner, play.hud_own_side())),
                 keep: *arg == 1,
             }),
             EndEvent::Sfx { id } => play.audio.push(roses_game::duel_audio::AudioCue::Se {
@@ -2187,7 +2187,7 @@ fn end_advance(
             // Two pads: 1P WIN / 2P WIN / DRAW with D54 = D50, the winner
             // (2 for a draw: no portrait) [F DUEL-END.md 0].
             banner::P1_WIN | banner::P2_WIN | banner::DRAW => {
-                let (code, side) = roses_game::duel_end_screens::seat_result(view.banner, active.winner, play.hud_own_side());
+                let (code, side) = roses_game::duel_end_screens::seat_result(view.banner, active.winner, play.hud_own_side(), play.spectating());
                 Some(BannerKind::Result { code, side })
             }
             banner::PROMOTION | banner::DEMOTION => view.rank_entry.map(|e| BannerKind::Rank {

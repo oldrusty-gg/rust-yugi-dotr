@@ -61,8 +61,23 @@ open SYSTEM -> SAVE to save to the virtual memory card; choose
 
 The memory card is stored in:
   roses-data\memory-card\   (next to roses-launcher.exe)
-To move to a newer version of this package, copy your roses-data
-folder (or at least roses-data\memory-card) into the new folder.
+
+
+UPDATING
+--------
+When the launcher starts it asks GitHub whether a newer release exists
+(nothing about you is sent; if GitHub cannot be reached, nothing happens).
+When there is one, "Get the latest launcher" at the top becomes an Update
+button. Click it and confirm: the launcher downloads the release, checks
+it, closes, replaces its program files in this folder and starts again.
+No copying is needed, and roses-data (imports, saves, logs) is not
+touched. Close the game first; the update waits for that.
+If anything goes wrong the old version stays and the launcher says why.
+Files of the old version that the new one no longer has are left in place.
+
+Releases up to 2026-11-06b have no Update button: unzip the new release,
+and copy your roses-data folder (or at least roses-data\memory-card) into
+the new folder. The link at the top opens the download page.
 
 
 KNOWN LIMITATIONS

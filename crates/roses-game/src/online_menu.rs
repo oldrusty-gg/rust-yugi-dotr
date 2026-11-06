@@ -1182,7 +1182,22 @@ impl OnlineMenu {
         }
     }
 
+    /// On the lobby screen with the server still counting this player in a
+    /// match (a game that could not join, or left early): it refuses anything
+    /// new until that match closes.
+    fn held_by_a_match(&self) -> bool {
+        let Some(l) = self.lobby.as_ref().filter(|_| self.screen == Screen::Lobby) else { return false };
+        l.players.iter().any(|p| Some(&p.name) == l.user.as_ref() && p.state == PlayerState::InMatch)
+    }
+
     fn act(&mut self, action: Action) {
+        if self.held_by_a_match()
+            && matches!(action, Action::Challenge(_) | Action::CreateRoom | Action::JoinRoom | Action::Computer | Action::Modes)
+        {
+            self.sfx.push(SFX_BUZZER);
+            self.note = Some("wait for your last match to close".into());
+            return;
+        }
         let ok = |m: &mut Self| m.sfx.push(SFX_CONFIRM);
         match action {
             Action::Title => {
@@ -2191,7 +2206,11 @@ impl OnlineMenu {
                     }
                 }
                 let others = self.rows().iter().filter(|(r, _)| matches!(r, Row::Player(..))).count();
-                info.push(if others == 0 { "Nobody else is online.".into() } else { "Choose a player to challenge:".into() });
+                if self.held_by_a_match() {
+                    info.push("Your last match is still closing.".into());
+                } else {
+                    info.push(if others == 0 { "Nobody else is online.".into() } else { "Choose a player to challenge:".into() });
+                }
                 "LOBBY"
             }
             Screen::Challenged { from, .. } => {

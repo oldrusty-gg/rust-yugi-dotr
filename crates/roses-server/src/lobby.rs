@@ -319,6 +319,7 @@ impl Lobby {
                 if let Some(from) = room.seat_of(&key) {
                     room.players[s] = room.players[from].take();
                 }
+                room.at = now;
                 self.tell_room(&code, out);
             }
             LobbyRequest::ModeRoomComputer { seat, computer } => {
@@ -332,6 +333,7 @@ impl Lobby {
                     return self.tell(name, problem(LobbyProblem::SeatTaken), out);
                 }
                 room.computer[s] = *computer;
+                room.at = now;
                 self.tell_room(&code, out);
             }
             LobbyRequest::ModeRoomSettings { settings } => {
@@ -339,7 +341,9 @@ impl Lobby {
                 if !host_of(self, &code) {
                     return self.tell(name, problem(LobbyProblem::NotHost), out);
                 }
-                self.mode_rooms.get_mut(&code).expect("a member's room").settings = settings.clone();
+                let room = self.mode_rooms.get_mut(&code).expect("a member's room");
+                room.settings = settings.clone();
+                room.at = now;
                 self.tell_room(&code, out);
             }
             LobbyRequest::StartModeRoom => {
@@ -582,6 +586,11 @@ impl Lobby {
                 p.room = None;
             }
             self.tell(&r.host, LobbyEvent::RoomClosed, &mut out);
+        }
+        // People waiting together keep an N-player room open; the time runs
+        // only for a host alone who does nothing, from when they were left.
+        for r in self.mode_rooms.values_mut().filter(|r| r.members().len() > 1) {
+            r.at = now;
         }
         let old: Vec<String> =
             self.mode_rooms.iter().filter(|(_, r)| now.saturating_sub(r.at) >= ROOM_MS).map(|(c, _)| c.clone()).collect();

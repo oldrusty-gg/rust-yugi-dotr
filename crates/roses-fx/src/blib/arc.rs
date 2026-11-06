@@ -236,14 +236,19 @@ pub fn arcs_b(fx: &mut Fx, at: u32, recs: u32, ot: u32, n: i32) -> i32 {
 
 /// [`arcs_b`] and the a3 it leaves [F]: this
 /// compile starts with the low word of the strips spec's second quadword
-/// (`lq a3, 0x10(t2)` of its copy; 0x3F in b040), then as [`arcs_a3`].
+/// (`lq a3, 0x10(t2)` of its copy; 0x3F in b040), then as [`arcs_a3`]. A
+/// counted record (count set, no delay) that returns before a step leaves
+/// its k loops' a3 = 0, not the spec word; both users pass n = 1, so the
+/// first record is the one that counts.
 pub fn arcs_b_a3(fx: &mut Fx, at: u32, recs: u32, ot: u32, n: i32) -> (i32, u32) {
     let strips = rel(fx, at, 0x3C, 0x40);
     let glow = rel(fx, at, 0x60, 0x64);
     let core = rel(fx, at, 0x80, 0x88);
-    let mut a3 = fx.mem.read_u32(strips + 0x10);
+    let spec = fx.mem.read_u32(strips + 0x10);
+    let counted = fx.mem.read_u8(recs) != 0 && fx.mem.read_u8(recs + 1) == 0;
+    let mut a3 = spec;
     let r = body(fx, [strips, glow, core], recs, ot, n, &mut a3);
-    (r, a3)
+    (r, if counted && a3 == spec { 0 } else { a3 })
 }
 
 fn body(fx: &mut Fx, [strips, glow, core]: [u32; 3], recs: u32, ot: u32, n: i32, a3: &mut u32) -> i32 {

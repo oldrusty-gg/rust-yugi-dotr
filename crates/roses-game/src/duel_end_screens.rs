@@ -288,15 +288,31 @@ pub enum BannerKind {
 
 /// The banner of a two-pad result on one screen: the code and D54. Online (a
 /// port addition) a seat has its own screen and nothing calls it 1P or 2P,
-/// so it reads YOU WIN / YOU LOSE with its own portrait; a draw, a spectator
-/// (`own_side` None) and offline stay as they are.
-pub fn seat_result(code: u8, winner: u8, own_side: Option<u8>) -> (u8, u8) {
+/// so it reads YOU WIN / YOU LOSE with its own portrait; a spectator reads
+/// WINNER with the winner's portrait; a draw and offline stay as they are.
+pub fn seat_result(code: u8, winner: u8, own_side: Option<u8>, spectator: bool) -> (u8, u8) {
     use roses_core::duel_end::banner;
+    let won = code == banner::P1_WIN || code == banner::P2_WIN;
     match own_side {
-        Some(own) if code == banner::P1_WIN || code == banner::P2_WIN => {
-            (if winner == own { banner::YOU_WIN } else { banner::YOU_LOSE }, own)
-        }
+        Some(own) if won => (if winner == own { banner::YOU_WIN } else { banner::YOU_LOSE }, own),
+        None if won && spectator => (SPECTATOR_WIN, winner),
         _ => (code, winner),
+    }
+}
+
+/// The result banner of an online spectator (a port addition, not one of
+/// 0x1B0120's codes), and its title: letters the gold font has.
+pub const SPECTATOR_WIN: u8 = 0xF0;
+const SPECTATOR_WIN_TITLE: &[u8] = b"WINNER";
+
+/// The jingle of a two-pad result on one seat's screen: a seat that lost
+/// hears the loss one (the banner's [`seat_result`], as `music_for` follows
+/// the code); a draw, a spectator and offline keep the original's track.
+pub fn seat_music(track: u8, winner: u8, own_side: Option<u8>) -> u8 {
+    use roses_core::duel_end::{MUSIC_LOSE, MUSIC_WIN};
+    match own_side {
+        Some(own) if track == MUSIC_WIN && winner != own => MUSIC_LOSE,
+        _ => track,
     }
 }
 
@@ -363,7 +379,11 @@ pub fn banner_primitives(
             Some(MSG_GET),
         ),
     };
-    let title = assets.banner_string(code)?.as_bytes().to_vec();
+    let title = if code == SPECTATOR_WIN {
+        SPECTATOR_WIN_TITLE.to_vec()
+    } else {
+        assets.banner_string(code)?.as_bytes().to_vec()
+    };
     let colour = match kind {
         BannerKind::Prize { .. } => PRIZE_COLOUR,
         _ => usize::from(side.unwrap_or(0)),
@@ -1578,13 +1598,34 @@ mod tests {
     #[test]
     fn an_online_seat_reads_you_win_or_you_lose() {
         use roses_core::duel_end::banner;
-        assert_eq!(seat_result(banner::P1_WIN, 0, Some(0)), (banner::YOU_WIN, 0));
-        assert_eq!(seat_result(banner::P1_WIN, 0, Some(1)), (banner::YOU_LOSE, 1));
-        assert_eq!(seat_result(banner::P2_WIN, 1, Some(1)), (banner::YOU_WIN, 1));
-        assert_eq!(seat_result(banner::P2_WIN, 1, Some(0)), (banner::YOU_LOSE, 0));
-        // A draw, a spectator and an offline shared screen are unchanged.
-        assert_eq!(seat_result(banner::DRAW, 2, Some(0)), (banner::DRAW, 2));
-        assert_eq!(seat_result(banner::P2_WIN, 1, None), (banner::P2_WIN, 1));
+        assert_eq!(seat_result(banner::P1_WIN, 0, Some(0), false), (banner::YOU_WIN, 0));
+        assert_eq!(seat_result(banner::P1_WIN, 0, Some(1), false), (banner::YOU_LOSE, 1));
+        assert_eq!(seat_result(banner::P2_WIN, 1, Some(1), false), (banner::YOU_WIN, 1));
+        assert_eq!(seat_result(banner::P2_WIN, 1, Some(0), false), (banner::YOU_LOSE, 0));
+        // A draw and an offline shared screen are unchanged.
+        assert_eq!(seat_result(banner::DRAW, 2, Some(0), false), (banner::DRAW, 2));
+        assert_eq!(seat_result(banner::P2_WIN, 1, None, false), (banner::P2_WIN, 1));
+    }
+
+    #[test]
+    fn a_spectator_reads_a_neutral_result_in_letters_the_font_has() {
+        use roses_core::duel_end::banner;
+        assert_eq!(seat_result(banner::P1_WIN, 0, None, true), (SPECTATOR_WIN, 0));
+        assert_eq!(seat_result(banner::P2_WIN, 1, None, true), (SPECTATOR_WIN, 1));
+        assert_eq!(seat_result(banner::DRAW, 2, None, true), (banner::DRAW, 2));
+        assert!(SPECTATOR_WIN_TITLE.iter().all(|&c| gold_glyph(c).is_some()));
+        assert!(SPECTATOR_WIN > banner::GET_SPECIAL_CARD, "not one of the original's codes");
+    }
+
+    #[test]
+    fn an_online_loser_hears_the_loss_jingle_and_everyone_else_the_original_track() {
+        use roses_core::duel_end::{MUSIC_LOSE, MUSIC_WIN};
+        assert_eq!(seat_music(MUSIC_WIN, 1, Some(0)), MUSIC_LOSE);
+        assert_eq!(seat_music(MUSIC_WIN, 0, Some(1)), MUSIC_LOSE);
+        assert_eq!(seat_music(MUSIC_WIN, 1, Some(1)), MUSIC_WIN);
+        // Offline and spectators (no own side) keep what the original plays.
+        assert_eq!(seat_music(MUSIC_WIN, 1, None), MUSIC_WIN);
+        assert_eq!(seat_music(MUSIC_LOSE, 1, None), MUSIC_LOSE);
     }
     use roses_core::slot_machine::{ReelData, SlotMachine};
 

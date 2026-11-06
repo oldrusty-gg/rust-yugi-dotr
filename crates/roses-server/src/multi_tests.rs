@@ -694,3 +694,228 @@ fn an_old_client_sees_no_rooms_and_no_n_player_match() {
     drop((conn, conn2));
     hub.stop();
 }
+
+// ---- leaving, waiting and missing seats (issues 7, 9, 10) -------------------
+
+#[test]
+fn a_room_with_people_waiting_stays_open_and_a_host_left_alone_gets_the_full_time() {
+    use crate::lobby::{Action, Lobby, ROOM_MS};
+    use roses_net::lobby::LobbyEvent;
+    let closed = |a: &[Action]| a.iter().any(|a| matches!(a, Action::Send(_, LobbyEvent::ModeRoomClosed)));
+    let mut lobby = Lobby::new(false);
+    lobby.enter("Yugi", 1, false);
+    lobby.enter("Kaiba", 2, false);
+    let actions = lobby.request("Yugi", &LobbyRequest::CreateModeRoom { settings: RoomSettings::default() }, 0);
+    let code = actions
+        .iter()
+        .find_map(|a| match a {
+            Action::Send(_, LobbyEvent::ModeRoom { room }) => Some(room.code.clone()),
+            _ => None,
+        })
+        .unwrap();
+    lobby.request("Kaiba", &LobbyRequest::JoinModeRoom { code }, 0);
+    for now in [ROOM_MS - 1, ROOM_MS, 2 * ROOM_MS] {
+        assert!(!closed(&lobby.tick(now)), "two people wait at {now}");
+    }
+    // Alone again: a full time from then, and a host still changing the
+    // room is still there.
+    lobby.request("Kaiba", &LobbyRequest::LeaveRoom, 2 * ROOM_MS);
+    assert!(!closed(&lobby.tick(3 * ROOM_MS - 1)));
+    lobby.request("Yugi", &LobbyRequest::ModeRoomComputer { seat: 3, computer: true }, 3 * ROOM_MS - 1);
+    assert!(!closed(&lobby.tick(3 * ROOM_MS)));
+    // Nobody came and the host did nothing: the room closes as before.
+    assert!(closed(&lobby.tick(4 * ROOM_MS)));
+}
+
+type MatchConn = roses_net::transport::Memory<ClientMessage, ServerMessage>;
+
+/// Yugi's room with Kaiba and two computer seats, started. `settings` keeps
+/// the computers slow, so the match stands still for the test.
+fn started_room(settings: HubSettings) -> (Running, roses_net::friends::LobbyClient, roses_net::friends::LobbyClient) {
+    let (hub, invite) = Running::with_settings(false, 4, settings, None);
+    let mut yugi = sign_up(&hub, "Yugi", &invite);
+    let mut kaiba = sign_up(&hub, "Kaiba", &invite);
+    yugi.send(LobbyRequest::CreateModeRoom { settings: RoomSettings { turn_seconds: 0, ..RoomSettings::default() } });
+    until(&mut yugi, "room", |c| c.mode_room.is_some());
+    let code = yugi.mode_room.as_ref().unwrap().code.clone();
+    kaiba.send(LobbyRequest::JoinModeRoom { code });
+    until(&mut yugi, "joined", |c| c.mode_room.as_ref().is_some_and(|r| r.seats[1].player.is_some()));
+    yugi.send(LobbyRequest::StartModeRoom);
+    until(&mut yugi, "ready", |c| c.multi_ready.is_some());
+    until(&mut kaiba, "ready", |c| c.multi_ready.is_some());
+    (hub, yugi, kaiba)
+}
+
+fn take_seat(hub: &Running, ticket: &str, seat: usize) -> MatchConn {
+    use roses_net::transport::Connection;
+    let mut conn = hub.match_connector()().unwrap();
+    conn.send(&ClientMessage::hello(yugi_compat(), Join::Ticket { ticket: ticket.into() }, Some(deck(seat)), false)).unwrap();
+    conn
+}
+
+fn wait_for(conn: &mut MatchConn, what: &str, mut done: impl FnMut(&ServerMessage) -> bool) {
+    use roses_net::transport::{recv_timeout, Received};
+    loop {
+        match recv_timeout(conn, Duration::from_secs(10)) {
+            Received::Message(m) if done(&m) => return,
+            Received::Message(_) => {}
+            _ => panic!("no {what}"),
+        }
+    }
+}
+
+#[test]
+fn a_knocked_out_player_who_leaves_is_free_and_a_later_end_leaves_their_next_match_alone() {
+    use crate::friends_tests::sees;
+    use roses_net::lobby::PlayerState;
+    use roses_net::transport::Connection;
+    let (hub, mut yugi, mut kaiba) = started_room(HubSettings { multi_computer_delay_ms: 60_000, ..HubSettings::default() });
+    let mut seat0 = take_seat(&hub, &yugi.multi_ready.clone().unwrap().ticket, 0);
+    let mut seat1 = take_seat(&hub, &kaiba.multi_ready.clone().unwrap().ticket, 1);
+    wait_for(&mut seat0, "start", |m| matches!(m, ServerMessage::Snapshot { .. }));
+    wait_for(&mut seat1, "start", |m| matches!(m, ServerMessage::Snapshot { .. }));
+    // Kaiba concedes and closes the duel; Yugi and the computers play on.
+    seat1.send(&ClientMessage::Forfeit { seq: 1 }).unwrap();
+    wait_for(&mut seat1, "the knock-out", |m| matches!(m, ServerMessage::Accepted { .. }));
+    seat1.close();
+    until(&mut yugi, "Kaiba free", |c| sees(c, "Kaiba", PlayerState::Idle));
+    until(&mut kaiba, "Kaiba's result", |c| c.over.is_some());
+    assert_eq!(kaiba.over.clone().unwrap().1, MatchResult::Lost);
+    // Signing in again does not pull him back, and he may play something else.
+    let mut again = hub.lobby();
+    again.send(LobbyRequest::LogIn { username: "Kaiba".into(), password: "Kaiba password".into() });
+    until(&mut again, "signed in", |c| c.user.is_some());
+    again.send(LobbyRequest::CreateModeRoom { settings: RoomSettings { turn_seconds: 0, ..RoomSettings::default() } });
+    until(&mut again, "his own room", |c| c.mode_room.is_some());
+    assert!(again.multi_ready.is_none(), "pulled back into the old match");
+    for seat in 1..4 {
+        again.send(LobbyRequest::ModeRoomComputer { seat, computer: true });
+    }
+    until(&mut again, "computers", |c| c.mode_room.as_ref().is_some_and(|r| r.seats[3].computer));
+    again.send(LobbyRequest::StartModeRoom);
+    until(&mut again, "his next match", |c| c.multi_ready.is_some());
+    // The old match's end frees Yugi and must not touch Kaiba's new match.
+    until(&mut yugi, "Kaiba busy", |c| sees(c, "Kaiba", PlayerState::InMatch));
+    seat0.send(&ClientMessage::Forfeit { seq: 1 }).unwrap();
+    wait_for(&mut seat0, "the knock-out", |m| matches!(m, ServerMessage::Accepted { .. }));
+    seat0.close();
+    until(&mut yugi, "Yugi free", |c| c.over.is_some() && sees(c, "Yugi", PlayerState::Idle));
+    assert!(sees(&yugi, "Kaiba", PlayerState::InMatch), "{:?}", yugi.players);
+    drop(hub.stop());
+}
+
+#[test]
+fn a_player_whose_seat_went_to_the_computer_is_told_and_freed() {
+    use roses_net::lobby::PlayerState;
+    let (hub, mut yugi, mut kaiba) =
+        started_room(HubSettings { multi_computer_delay_ms: 60_000, start_ms: 300, ..HubSettings::default() });
+    // Kaiba's game could not join (match_failed): only Yugi comes.
+    let mut seat0 = take_seat(&hub, &yugi.multi_ready.clone().unwrap().ticket, 0);
+    wait_for(&mut seat0, "start", |m| matches!(m, ServerMessage::Snapshot { .. }));
+    until(&mut kaiba, "told", |c| c.over.is_some());
+    assert_eq!(kaiba.over.clone().unwrap().1, MatchResult::Cancelled);
+    until(&mut yugi, "Kaiba free", |c| crate::friends_tests::sees(c, "Kaiba", PlayerState::Idle));
+    drop(hub.stop());
+}
+
+// ---- issue 8: seats of an N-player match learn who is away ------------------
+
+/// Seats 0..3 are players, seat 3 a computer; `away_seat` drops at once,
+/// `slow_seat` sits out its clock, the others end their turns at once.
+/// Returns what seat 0's [`AwaySeats`] said after every update.
+fn play_watching_away(turn_seconds: u16, away_seat: Option<u8>, slow_seat: Option<u8>) -> Vec<bool> {
+    use roses_core::duel::DuelCommand;
+    use roses_net::client::AwaySeats;
+    let room = RoomSettings { turn_seconds, ..settings(RoomMode::FreeForAll) };
+    let mut g = game(3, room, 40);
+    let mut clients = vec![ClientState::new(), ClientState::new(), ClientState::new(), ClientState::new()];
+    for s in 0..3u8 {
+        let (_, out) = g.hello(&yugi_compat(), &Join::Seat { seat: Some(s) }, Some(&deck(usize::from(s))), false, false, 0).unwrap();
+        take(&mut clients, out);
+    }
+    let mut away = AwaySeats::default();
+    let mut said = Vec::new();
+    let mut feed = |clients: &mut Vec<ClientState>, out: Outbox, now: u64| {
+        for (seat, m) in out {
+            let i = usize::from(seat);
+            let was = clients[i].view.as_ref().map(|v| v.board.active);
+            clients[i].apply(&m);
+            if seat == 0 {
+                if let ServerMessage::Update { actor, cause, view, .. } = &m {
+                    away.update(Some(0), was, *actor, *cause, view, clients[i].turn_limit, now);
+                    said.push(away.any());
+                }
+            }
+        }
+    };
+    let mut now = 1;
+    if let Some(s) = away_seat {
+        let out = g.disconnect(s, now);
+        feed(&mut clients, out, now);
+    }
+    while now < 200_000 && g.ended().is_none() {
+        now += 100;
+        let out = g.tick(now);
+        feed(&mut clients, out, now);
+        let active = g.duel().unwrap().active;
+        let held = Some(active) == away_seat || Some(active) == slow_seat || active == 3;
+        if !held && clients[usize::from(active)].my_turn() {
+            let m = clients[usize::from(active)].command(DuelCommand::EndTurn);
+            let out = g.handle(active, m, now);
+            feed(&mut clients, out, now);
+        }
+    }
+    said
+}
+
+#[test]
+fn a_seat_is_told_when_another_seats_turns_are_skipped_and_a_slow_seat_is_not_called_away() {
+    // No clock: every server-ended turn is a skip.
+    let said = play_watching_away(0, Some(1), None);
+    assert!(said.iter().any(|&s| s), "seat 1 is gone and nobody said so");
+    // A clock, and the same drop: the skip comes long before the limit.
+    let said = play_watching_away(30, Some(1), None);
+    assert!(said.iter().any(|&s| s), "seat 1 is gone and nobody said so");
+    // A clock and nobody gone: seat 2 sits out its clock, which is not away.
+    let said = play_watching_away(30, None, Some(2));
+    assert!(said.len() > 3, "the turns went round");
+    assert!(!said.iter().any(|&s| s), "seat 2 is only slow");
+}
+
+#[test]
+fn the_away_note_ends_when_the_seat_acts_or_is_knocked_out() {
+    use roses_net::client::AwaySeats;
+    use roses_net::Actor;
+    let mut g = game(2, settings(RoomMode::FreeForAll), 41);
+    let mut c = ClientState::new();
+    for s in 0..2u8 {
+        let (_, out) = g.hello(&yugi_compat(), &Join::Seat { seat: Some(s) }, Some(&deck(usize::from(s))), false, false, 0).unwrap();
+        for (seat, m) in out {
+            if seat == 0 {
+                c.apply(&m);
+            }
+        }
+    }
+    let mut view = c.view.clone().unwrap();
+    let mut away = AwaySeats::default();
+    away.update(Some(0), Some(1), Actor::Server, Cause::TurnTimeout, &view, None, 10);
+    assert!(away.any());
+    // Its own timeout never calls this seat away.
+    let mut mine = AwaySeats::default();
+    mine.update(Some(0), Some(0), Actor::Server, Cause::TurnTimeout, &view, None, 10);
+    assert!(!mine.any());
+    // It came back.
+    away.update(Some(0), Some(1), Actor::Seat { seat: 1 }, Cause::Command, &view, None, 20);
+    assert!(!away.any());
+    // Knocked out: nothing to wait for.
+    away.update(Some(0), Some(1), Actor::Server, Cause::TurnTimeout, &view, None, 30);
+    assert!(away.any());
+    let knocked_out = g.duel().unwrap().forfeit_with(1, &synthetic::catalogue()).unwrap().0;
+    view.multi = knocked_out.multi().cloned();
+    away.update(Some(0), Some(2), Actor::Server, Cause::Abandoned, &view, None, 40);
+    assert!(!away.any());
+    // A 2-seat match pauses instead and is left alone.
+    view.multi = None;
+    away.update(Some(0), Some(1), Actor::Server, Cause::TurnTimeout, &view, None, 50);
+    assert!(!away.any());
+}

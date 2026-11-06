@@ -8022,6 +8022,7 @@ mod tests {
 
     /// N-player plates on the real art (`ROSES_DUEL_IMPORT`): with
     /// `ROSES_HUD_NAMES_OUT` the frame is written there as a PNG (over black).
+    #[cfg(feature = "online")]
     #[test]
     fn private_compact_plates_draw_their_names_with_long_ones_shortened() {
         let Some(dir) = private_import() else { return };

@@ -324,6 +324,16 @@ impl MultiMatch {
     pub fn connected(&self, seat: u8) -> bool {
         self.seats.get(usize::from(seat)).is_some_and(|s| s.connected)
     }
+    /// A player knocked out of a running match with no connection left: the
+    /// match no longer needs them, the lobby may have them back.
+    pub fn left_after_knockout(&self, seat: u8) -> bool {
+        let Some(st) = self.seats.get(usize::from(seat)) else { return false };
+        self.ended.is_none()
+            && st.joined
+            && !st.connected
+            && !st.info.computer
+            && self.duel.as_ref().is_some_and(|d| !d.alive(seat))
+    }
     pub fn token(&self, seat: u8) -> Option<&str> {
         self.seats.get(usize::from(seat)).map(|s| s.token.as_str())
     }

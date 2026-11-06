@@ -342,6 +342,9 @@ struct HostedMulti {
     /// Listed for spectators (the room allows them).
     listed: bool,
     spectators: Vec<ConnId>,
+    /// By seat: knocked out and gone, so given back to the lobby before the
+    /// end (the end no longer speaks for them; they may be in another match).
+    released: Vec<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -2124,6 +2127,13 @@ impl Hub {
             Ok((seat, out)) => {
                 let old = h.seats[usize::from(seat)].replace(id);
                 let player = h.players[usize::from(seat)].clone();
+                // Back from a dropped connection before anything else began:
+                // the match has them again.
+                if h.released[usize::from(seat)] && !self.lobby.in_match(&player) {
+                    h.released[usize::from(seat)] = false;
+                    let actions = self.lobby.started(&[player.as_str()]);
+                    self.act(actions, now);
+                }
                 if let Some(c) = self.conns.get_mut(&id) {
                     c.role = Role::MultiSeat { match_id: match_id.clone(), seat };
                 }
@@ -2379,6 +2389,7 @@ impl Hub {
                 players: names,
                 tickets,
                 seats: vec![None; players.len()],
+                released: vec![false; players.len()],
                 created: now,
                 created_wall: accounts::now_seconds(),
                 ended_at: None,
@@ -2420,6 +2431,7 @@ impl Hub {
             h.players
                 .iter()
                 .position(|p| p != COMPUTER_NAME && username_key(p) == key)
+                .filter(|&s| !h.released[s])
                 .map(|s| (mid.clone(), s as u8))
         })
     }
@@ -2450,6 +2462,7 @@ impl Hub {
         let out = self.multis.get_mut(mid).expect("listed").game.tick(now);
         busy |= !out.is_empty();
         self.deliver_multi(mid, out, now);
+        busy |= self.release_seats(mid, now);
         let h = self.multis.get(mid).expect("listed");
         if !h.game.started() && h.game.ended().is_none() && now.saturating_sub(h.created) >= self.settings.start_ms {
             let infos = h.game.seat_infos();
@@ -2472,11 +2485,13 @@ impl Hub {
             let h = self.multis.get_mut(mid).expect("listed");
             match h.game.fill_with_computers(|| decks.next().expect("a computer deck")) {
                 Ok((filled, out)) => {
-                    for s in &filled {
-                        h.players[usize::from(*s)] = COMPUTER_NAME.to_string();
-                    }
+                    let missing: Vec<String> =
+                        filled.iter().map(|s| std::mem::replace(&mut h.players[usize::from(*s)], COMPUTER_NAME.to_string())).collect();
                     self.log(&format!("{mid}: started; computer players for seats {filled:?}"));
                     self.deliver_multi(mid, out, now);
+                    // Their seats are the computer's: the match is off for
+                    // them, and its end will not name them.
+                    self.free_players(mid, &missing, MatchResult::Cancelled, None, now);
                 }
                 Err(e) => {
                     self.log(&format!("{mid}: cancelled: {e}"));
@@ -2504,12 +2519,41 @@ impl Hub {
         busy
     }
 
+    /// Give players back to the lobby while their match goes on.
+    fn free_players(&mut self, mid: &str, names: &[String], result: MatchResult, cause: Option<roses_net::Cause>, now: u64) {
+        for name in names {
+            if let Some(cid) = self.lobby.conn_of(name) {
+                self.lobby_send(cid, LobbyEvent::MatchOver { match_id: mid.to_string(), result, cause }, now);
+            }
+        }
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let actions = self.lobby.ended(&names);
+        self.act(actions, now);
+    }
+
+    /// Players knocked out of a running N-player match who have left: they
+    /// are done with it (a 2v2 team-mate may play on; a player who walked
+    /// away has lost), so they are not busy and signing in leaves them out.
+    fn release_seats(&mut self, mid: &str, now: u64) -> bool {
+        let Some(h) = self.multis.get_mut(mid) else { return false };
+        let mut gone = Vec::new();
+        for s in 0..h.game.seat_count() {
+            if !h.released[usize::from(s)] && h.game.left_after_knockout(s) {
+                h.released[usize::from(s)] = true;
+                gone.push(h.players[usize::from(s)].clone());
+            }
+        }
+        self.free_players(mid, &gone, MatchResult::Lost, Some(roses_net::Cause::Abandoned), now);
+        !gone.is_empty()
+    }
+
     /// An N-player match ended (or was cancelled): log it, keep its record,
     /// tell its players (won: their team won), free them in the lobby.
     fn finish_multi(&mut self, mid: &str, end: Option<(roses_core::duel::Outcome, roses_net::Cause)>, now: u64) {
         let Some(h) = self.multis.get_mut(mid) else { return };
         h.ended_at = Some(now);
         let players = h.players.clone();
+        let released = h.released.clone();
         let infos = h.game.seat_infos();
         if let Some((outcome, cause)) = end {
             let shown: Vec<String> = infos.iter().map(|s| s.name.clone()).collect();
@@ -2543,7 +2587,7 @@ impl Hub {
             self.log(&line);
         }
         for (seat, name) in players.iter().enumerate() {
-            if name == COMPUTER_NAME {
+            if name == COMPUTER_NAME || released[seat] {
                 continue;
             }
             let result = match end {
@@ -2559,7 +2603,8 @@ impl Hub {
                 self.lobby_send(cid, event, now);
             }
         }
-        let names: Vec<&str> = players.iter().filter(|n| *n != COMPUTER_NAME).map(String::as_str).collect();
+        let names: Vec<&str> =
+            players.iter().zip(&released).filter(|(n, r)| *n != COMPUTER_NAME && !**r).map(|(n, _)| n.as_str()).collect();
         let actions = self.lobby.ended(&names);
         self.act(actions, now);
     }

@@ -4,7 +4,7 @@
 //! intentions from the seat's own view only.
 
 use crate::filter::PlayerView;
-use crate::protocol::{Cause, ClientMessage, Decision, MatchOptions, MatchStatus, Refusal, ServerMessage};
+use crate::protocol::{Actor, Cause, ClientMessage, Decision, MatchOptions, MatchStatus, Refusal, ServerMessage};
 use roses_core::duel::{CardData, DuelCommand, Outcome, Pick, LEADER_CELLS};
 use roses_core::GridPos;
 use std::collections::{BTreeMap, BTreeSet};
@@ -34,7 +34,78 @@ pub struct ClientState {
     pub names: Option<[String; 2]>,
     /// Spectators watching the match (the last [`ServerMessage::Watchers`]).
     pub watchers: u16,
+    /// The match's turn clock in milliseconds (from the welcome; none in a
+    /// room without one).
+    pub turn_limit: Option<u64>,
     next_seq: u64,
+}
+
+/// How much sooner than the turn clock a server-ended turn must come to
+/// count as a skip (network delay between the two messages timed).
+const AWAY_MARGIN_MS: u64 = 2_000;
+
+/// The seats of an N-player match that look gone. The match never pauses
+/// and protocol 4 has no message for it (`Paused` would stop the released
+/// client's seats: `my_turn` needs `Running`), but the server ends a
+/// disconnected seat's turn the moment it comes up, with the cause of an
+/// expired turn. So a turn the server ended well before the clock says the
+/// seat is away, from its first skipped turn until it acts or is out.
+#[derive(Clone, Debug, Default)]
+pub struct AwaySeats {
+    seats: BTreeSet<u8>,
+    turn: Option<(u8, u8)>,
+    began: Option<u64>,
+}
+
+impl AwaySeats {
+    /// One update of the match, as received. `was_active`: the side whose
+    /// turn it was before it, `me`: this seat (none for a spectator),
+    /// `limit`: the turn clock, `now`: milliseconds on any steady clock.
+    #[allow(clippy::too_many_arguments)]
+    pub fn update(
+        &mut self,
+        me: Option<u8>,
+        was_active: Option<u8>,
+        actor: Actor,
+        cause: Cause,
+        view: &PlayerView,
+        limit: Option<u64>,
+        now: u64,
+    ) {
+        let Some(multi) = &view.multi else { return };
+        self.seats.retain(|&s| multi.out.get(usize::from(s)).is_some_and(Option::is_none));
+        if let Actor::Seat { seat } = actor {
+            self.seats.remove(&seat);
+        }
+        if let (Actor::Server, Cause::TurnTimeout, Some(seat)) = (actor, cause, was_active) {
+            let skipped = match limit {
+                None => true,
+                Some(limit) => self.began.is_some_and(|b| now.saturating_sub(b) + AWAY_MARGIN_MS < limit),
+            };
+            if skipped && Some(seat) != me {
+                self.seats.insert(seat);
+            } else {
+                // The clock ran out on it: it is there, only silent.
+                self.seats.remove(&seat);
+            }
+        }
+        let turn = (view.board.round, view.board.active);
+        if self.turn != Some(turn) {
+            if self.turn.is_some() || was_active != Some(view.board.active) {
+                self.began = Some(now);
+            }
+            self.turn = Some(turn);
+        }
+    }
+
+    /// A snapshot replaced what this connection knew.
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    pub fn any(&self) -> bool {
+        !self.seats.is_empty()
+    }
 }
 
 impl ClientState {
@@ -82,8 +153,10 @@ impl ClientState {
                 seat,
                 resume_token,
                 options,
+                policy,
                 ..
             } => {
+                self.turn_limit = policy.turn_limit;
                 self.options = Some(*options);
                 self.match_id = Some(match_id.clone());
                 self.seat = Some(*seat);
@@ -145,7 +218,8 @@ impl ClientState {
                     LobbyRefusal::ServerFull => Refusal::ServerBusy,
                 });
             }
-            ServerMessage::Watching { match_id, names, options, .. } => {
+            ServerMessage::Watching { match_id, names, options, multi, .. } => {
+                self.turn_limit = multi.as_ref().map(|m| u64::from(m.settings.turn_seconds) * 1000).filter(|&ms| ms > 0);
                 self.spectator = true;
                 self.match_id = Some(match_id.clone());
                 self.names = Some(names.clone());

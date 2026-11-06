@@ -302,10 +302,7 @@ fn step(fx: &mut Fx, sp: u32) -> i32 {
     columns(fx, COLUMNS, 0x28);
     saves(fx, 0x320, 0x20, 9, 0x01E0_6C58);
     blib::arch::arches_b(fx, 0x01E0_2010, ARCHES, OT, 4);
-    // A counted record leaves the k loops' a3 = 0 until a step sets it.
-    let due = fx.mem.read_u8(ARCS) != 0 && fx.mem.read_u8(ARCS + 1) == 0;
     let (_, a3) = blib::arc::arcs_b_a3(fx, 0x01E0_2870, ARCS, OT, 1);
-    let a3 = if due && a3 == 0x3F { 0 } else { a3 };
     blib::window::frame_rays_b(fx, 0x01E0_3990, RAYS, OT, 1, a3, [0, 0]);
     split(fx, SPLIT, 1);
     saves(fx, 0x260, 0x10, 9, 0x01E0_6C98);

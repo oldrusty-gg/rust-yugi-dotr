@@ -188,6 +188,10 @@ pub struct OnlineLink {
     /// is retried.
     lost_at: Option<Instant>,
     give_up_after: Duration,
+    /// N-player: the seats whose turns the server is skipping, and the
+    /// clock their turns are timed on.
+    away: roses_net::client::AwaySeats,
+    opened: Instant,
 }
 
 impl OnlineLink {
@@ -230,6 +234,8 @@ impl OnlineLink {
             watch_ticket: None,
             sent_away: None,
             lost_at: None,
+            away: Default::default(),
+            opened: Instant::now(),
             give_up_after: RECONNECT_GIVE_UP,
         };
         let start = Instant::now();
@@ -296,6 +302,8 @@ impl OnlineLink {
             watch_ticket: Some(ticket),
             sent_away: None,
             lost_at: None,
+            away: Default::default(),
+            opened: Instant::now(),
             give_up_after: RECONNECT_GIVE_UP,
         };
         let start = Instant::now();
@@ -421,14 +429,17 @@ impl OnlineLink {
     }
 
     fn receive(&mut self, m: ServerMessage) {
+        let was_active = self.state.view.as_ref().map(|v| v.board.active);
         self.state.apply(&m);
         if matches!(m, ServerMessage::Snapshot { .. }) {
             self.lost_at = None;
         }
         match m {
-            ServerMessage::Update { revision, actor, cause, events, view } => self
-                .queue
-                .push_back(Item::Revision(Revision { revision, actor, cause, events, view }, Instant::now())),
+            ServerMessage::Update { revision, actor, cause, events, view } => {
+                let now = self.opened.elapsed().as_millis() as u64;
+                self.away.update(self.state.seat, was_active, actor, cause, &view, self.state.turn_limit, now);
+                self.queue.push_back(Item::Revision(Revision { revision, actor, cause, events, view }, Instant::now()));
+            }
             ServerMessage::Presence { seat, press } => {
                 // A spectator presents both seats' presses. The welcome's
                 // seat: `self.seat` is not set until `connect` returns, and
@@ -438,6 +449,7 @@ impl OnlineLink {
                 }
             }
             ServerMessage::Snapshot { snapshot } => {
+                self.away.clear();
                 if snapshot.revision >= self.shown_revision || self.resync.is_none() {
                     self.resync = Some(snapshot);
                 }
@@ -508,6 +520,9 @@ impl OnlineLink {
             Some("RECONNECTING")
         } else if self.paused() {
             Some(if self.spectator { "PLAYER AWAY" } else { "OPPONENT AWAY" })
+        } else if self.away.any() {
+            // N-player: it may be a team-mate.
+            Some("PLAYER AWAY")
         } else {
             None
         }
