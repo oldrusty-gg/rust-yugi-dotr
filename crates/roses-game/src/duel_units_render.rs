@@ -578,9 +578,7 @@ impl UnitModels {
                 Err(error) => errors.push(format!("card {}: {error}", unit.card)),
             }
             for handle in &unit.materials {
-                if let Some(mut material) = materials.get_mut(handle) {
-                    material.set_ndc(ndc);
-                }
+                crate::duel_model_render::set_ndc_if_changed(materials, handle, ndc);
             }
         }
         for error in errors {
@@ -698,9 +696,7 @@ impl UnitModels {
             Err(e) => error = Some(format!("card {}: {e}", pose.card)),
         }
         for handle in &unit.materials {
-            if let Some(mut material) = materials.get_mut(handle) {
-                material.set_ndc(ndc);
-            }
+            crate::duel_model_render::set_ndc_if_changed(materials, handle, ndc);
         }
         if let Some(e) = error {
             self.report(e);
@@ -961,9 +957,7 @@ impl UnitModels {
         if self.applied_view.as_ref() != Some(view) {
             for unit in &self.active {
                 for handle in &unit.materials {
-                    if let Some(mut material) = materials.get_mut(handle) {
-                        material.set_ndc(ndc);
-                    }
+                    crate::duel_model_render::set_ndc_if_changed(materials, handle, ndc);
                 }
             }
             self.applied_view = Some(*view);

@@ -58,6 +58,8 @@ mod deck_editor_render;
 mod duel_board_render;
 mod duel_model_render;
 mod duel_units_render;
+mod frame_stats;
+mod render_cost;
 mod ending_render;
 mod mode_fade;
 mod movie_play;
@@ -4306,6 +4308,8 @@ Video recorder (a tool, docs/ADDITIONS.md): add --record <new.mp4> [--record-siz
     app.insert_resource(ClearColor(Color::BLACK))
         .insert_resource(InputScene(loaded))
         .add_plugins(plugins)
+        .add_plugins(frame_stats::plugin)
+        .add_plugins(render_cost::plugin)
         .add_plugins(MaterialPlugin::<CapturedMaterial>::default())
         .add_plugins(MaterialPlugin::<CompositeMaterial>::default())
         .add_plugins(MaterialPlugin::<CloudMaterial>::default())

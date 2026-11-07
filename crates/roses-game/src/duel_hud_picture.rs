@@ -84,6 +84,7 @@ impl TerrainPicture {
         let m = camera::mul(&view, &world);
         let mut target = Target16 { width: SIZE, height: SIZE, pixels: vec![0; SIZE * SIZE] };
         let mut zbuf = vec![0u32; SIZE * SIZE];
+        let mut triangles = Vec::new();
         let mut draws: Vec<&duel_board::DrawMesh> = model.draws.iter().collect();
         draws.sort_by_key(|d| d.draw_index);
         for d in draws {
@@ -107,26 +108,45 @@ impl TerrainPicture {
                     continue;
                 };
                 let uv = |k: usize| d.uv[tri[k] as usize];
-                gs::draw_triangle_z(
-                    &mut target,
-                    &mut zbuf,
-                    &Triangle3 {
-                        xy: [vs[0].0, vs[1].0, vs[2].0],
-                        z: [vs[0].1, vs[1].1, vs[2].1],
-                        stq: std::array::from_fn(|k| {
-                            let q = vs[k].2;
-                            [f64::from(uv(k)[0]) * q, f64::from(uv(k)[1]) * q, q]
-                        }),
-                        rgba: [colour; 3],
-                        texture,
-                        bilinear: d.linear,
-                        tcc: d.texture_alpha,
-                        fba: true,
-                        dither: Some(dimx),
-                    },
-                );
+                triangles.push(Triangle3 {
+                    xy: [vs[0].0, vs[1].0, vs[2].0],
+                    z: [vs[0].1, vs[1].1, vs[2].1],
+                    stq: std::array::from_fn(|k| {
+                        let q = vs[k].2;
+                        [f64::from(uv(k)[0]) * q, f64::from(uv(k)[1]) * q, q]
+                    }),
+                    rgba: [colour; 3],
+                    texture,
+                    bilinear: d.linear,
+                    tcc: d.texture_alpha,
+                    fba: true,
+                    dither: Some(dimx),
+                });
             }
         }
+        // The target in row bands, one thread each: every pixel sees the
+        // same triangles in the same order, so the picture is the same as
+        // drawn in one pass (issue #20: one pass took ~10 ms per update).
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, 8);
+        let band = SIZE.div_ceil(threads);
+        std::thread::scope(|scope| {
+            for (i, (pixels, zbuf)) in
+                target.pixels.chunks_mut(band * SIZE).zip(zbuf.chunks_mut(band * SIZE)).enumerate()
+            {
+                let triangles = &triangles;
+                let rows = i * band..(i * band + pixels.len() / SIZE);
+                let mut draw = move || {
+                    for tri in triangles {
+                        gs::draw_triangle_z_rows(pixels, zbuf, SIZE, SIZE, rows.clone(), tri);
+                    }
+                };
+                if i + 1 == threads {
+                    draw();
+                } else {
+                    scope.spawn(draw);
+                }
+            }
+        });
         Some(Texture::from_c16(SIZE, SIZE, &target.pixels, 0, 0x80))
     }
 

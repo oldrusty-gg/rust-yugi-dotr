@@ -2347,9 +2347,7 @@ fn sync_figure(
         }
     }
     for handle in &model.materials {
-        if let Some(mut material) = materials.get_mut(handle) {
-            material.set_ndc(ndc);
-        }
+        crate::duel_model_render::set_ndc_if_changed(&mut materials, handle, ndc);
     }
     // The main loop advances every object's clock once per update.
     model.scene.tick();

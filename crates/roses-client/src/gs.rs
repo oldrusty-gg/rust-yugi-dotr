@@ -238,6 +238,21 @@ impl Pipeline {
         rgba: [u8; 4],
         tex: Option<[u8; 4]>,
     ) {
+        let index = py * target.width + px;
+        self.pixel_at(&mut target.pixels, index, px, py, rgba, tex);
+    }
+
+    /// [`Pipeline::pixel`] into `pixels[index]` (a band of a target, whose
+    /// pixel (px, py) it is: the dither follows px, py).
+    fn pixel_at(
+        &self,
+        pixels: &mut [u16],
+        index: usize,
+        px: usize,
+        py: usize,
+        rgba: [u8; 4],
+        tex: Option<[u8; 4]>,
+    ) {
         let (mut c, mut a) = ([rgba[0], rgba[1], rgba[2]], rgba[3]);
         if let Some(texel) = tex {
             if self.modulate {
@@ -257,8 +272,7 @@ impl Pipeline {
         if self.alpha_test_greater.is_some_and(|aref| a <= aref) {
             return;
         }
-        let index = py * target.width + px;
-        let old = target.pixels[index];
+        let old = pixels[index];
         let cd = [
             ((old & 31) << 3) as i32,
             (((old >> 5) & 31) << 3) as i32,
@@ -283,7 +297,7 @@ impl Pipeline {
         }
         let d = self.dither.map_or(0, |dimx| dither(dimx, px, py));
         let q = |v: i32| ((v.clamp(0, 255) + d).clamp(0, 255) >> 3) as u16;
-        target.pixels[index] =
+        pixels[index] =
             q(out[0]) | q(out[1]) << 5 | q(out[2]) << 10 | u16::from(a >= 128 || self.fba) << 15;
     }
 }
@@ -476,6 +490,22 @@ pub struct Triangle3<'a> {
 /// MODULATE; ZTST GREATER. The software GS's exact plane rounding is not
 /// modelled [H].
 pub fn draw_triangle_z(target: &mut Target16, zbuf: &mut [u32], t: &Triangle3) {
+    let (width, height) = (target.width, target.height);
+    draw_triangle_z_rows(&mut target.pixels, zbuf, width, height, 0..height, t);
+}
+
+/// [`draw_triangle_z`] restricted to the target rows `rows`: `pixels` and
+/// `zbuf` hold those rows only (`width` × `rows.len()`). Each pixel sees the
+/// same triangles in the same order as in the whole target, so bands drawn
+/// apart (on several threads) give the same pixels.
+pub fn draw_triangle_z_rows(
+    pixels: &mut [u16],
+    zbuf: &mut [u32],
+    width: usize,
+    height: usize,
+    rows: std::ops::Range<usize>,
+    t: &Triangle3,
+) {
     let p: [[i64; 2]; 3] = t.xy.map(|[x, y]| [fx(x), fx(y)]);
     let area =
         (p[1][0] - p[0][0]) * (p[2][1] - p[0][1]) - (p[1][1] - p[0][1]) * (p[2][0] - p[0][0]);
@@ -494,38 +524,41 @@ pub fn draw_triangle_z(target: &mut Target16, zbuf: &mut [u32], t: &Triangle3) {
         p.iter().map(|v| v[1]).min().unwrap(),
         p.iter().map(|v| v[1]).max().unwrap(),
     );
-    let first_row = floor_div(ymin + 15, 16).max(0);
-    let end_row = floor_div(ymax + 15, 16).min(target.height as i64);
+    let first_row = floor_div(ymin + 15, 16).max(0).max(rows.start as i64);
+    let end_row = floor_div(ymax + 15, 16).min(height as i64).min(rows.end as i64);
     let weight = |i: usize, x: i64, y: i64| {
         let (a, b) = (p[(i + 1) % 3], p[(i + 2) % 3]);
         (b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0])
     };
     for py in first_row..end_row {
         let y = py * 16;
-        let mut xs: Vec<(i64, i64)> = Vec::new();
+        let mut found = [(0i64, 0i64); 3];
+        let mut n = 0;
         for i in 0..3 {
             let (a, b) = (p[i], p[(i + 1) % 3]);
             let (lo, hi) = if a[1] < b[1] { (a, b) } else { (b, a) };
             if lo[1] <= y && y < hi[1] {
                 let d = hi[1] - lo[1];
-                xs.push((lo[0] * d + (y - lo[1]) * (hi[0] - lo[0]), d));
+                found[n] = (lo[0] * d + (y - lo[1]) * (hi[0] - lo[0]), d);
+                n += 1;
             }
         }
-        if xs.len() < 2 {
+        if n < 2 {
             continue;
         }
+        let xs = &mut found[..n];
         xs.sort_by(|a, b| {
             (i128::from(a.0) * i128::from(b.1)).cmp(&(i128::from(b.0) * i128::from(a.1)))
         });
         let (l, r) = (xs[0], xs[xs.len() - 1]);
         let first = floor_div(l.0 + 16 * l.1 - 1, 16 * l.1).max(0);
-        let end = floor_div(r.0 + 16 * r.1 - 1, 16 * r.1).min(target.width as i64);
+        let end = floor_div(r.0 + 16 * r.1 - 1, 16 * r.1).min(width as i64);
         for px in first..end {
             let x = px * 16;
             let w = [weight(0, x, y), weight(1, x, y), weight(2, x, y)].map(|v| v as f64 / area as f64);
             let lerp = |a: [f64; 3]| w[0] * a[0] + w[1] * a[1] + w[2] * a[2];
             let z = lerp(t.z).clamp(0.0, f64::from(0xFF_FFFFu32)) as u32;
-            let index = py as usize * target.width + px as usize;
+            let index = (py as usize - rows.start) * width + px as usize;
             if z <= zbuf[index] {
                 continue;
             }
@@ -542,7 +575,7 @@ pub fn draw_triangle_z(target: &mut Target16, zbuf: &mut [u32], t: &Triangle3) {
                     tex.at(u >> 16, v >> 16)
                 }
             });
-            pipe.pixel(target, px as usize, py as usize, rgba, tex);
+            pipe.pixel_at(pixels, index, px as usize, py as usize, rgba, tex);
         }
     }
 }
@@ -569,6 +602,62 @@ pub fn draw_strip(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Row bands drawn apart (as the HUD terrain picture draws them on
+    /// several threads) give the same pixels and Z as one whole pass.
+    #[test]
+    fn banded_z_triangles_match_one_pass() {
+        let tex = Texture {
+            width: 4,
+            height: 4,
+            texels: (0..16).map(|i| [i * 15, 255 - i * 15, (i * 37) % 256, 64 + i * 4].map(|v: u32| v as u8)).collect(),
+        };
+        let (w, h) = (37, 29);
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let tris: Vec<Triangle3> = (0..40)
+            .map(|_| {
+                let mut f = |range: f64| (next() % 10_000) as f64 / 10_000.0 * range;
+                Triangle3 {
+                    xy: std::array::from_fn(|_| [(f(50.0) - 6.0) as f32, (f(40.0) - 5.0) as f32]),
+                    z: std::array::from_fn(|_| f(16_000_000.0)),
+                    stq: std::array::from_fn(|_| {
+                        let q = 0.2 + f(1.0);
+                        [f(1.0) * q, f(1.0) * q, q]
+                    }),
+                    rgba: std::array::from_fn(|_| std::array::from_fn(|_| f(255.0) as u8)),
+                    texture: Some(&tex),
+                    bilinear: f(1.0) < 0.5,
+                    tcc: f(1.0) < 0.5,
+                    fba: f(1.0) < 0.5,
+                    dither: Some(0x0171_0716_7101_0607),
+                }
+            })
+            .collect();
+        let mut whole = Target16 { width: w, height: h, pixels: vec![0x1234; w * h] };
+        let mut whole_z = vec![0u32; w * h];
+        for t in &tris {
+            draw_triangle_z(&mut whole, &mut whole_z, t);
+        }
+        for band in [1, 4, 7, 29] {
+            let mut pixels = vec![0x1234u16; w * h];
+            let mut z = vec![0u32; w * h];
+            for (i, (p, zb)) in pixels.chunks_mut(band * w).zip(z.chunks_mut(band * w)).enumerate() {
+                let rows = i * band..i * band + p.len() / w;
+                for t in &tris {
+                    draw_triangle_z_rows(p, zb, w, h, rows.clone(), t);
+                }
+            }
+            assert_eq!(pixels, whole.pixels, "band {band}");
+            assert_eq!(z, whole_z, "band {band}");
+        }
+        assert!(whole.pixels.iter().any(|&p| p != 0x1234), "the triangles drew");
+    }
 
     #[test]
     fn blend_dither_and_quantize_like_the_gs() {

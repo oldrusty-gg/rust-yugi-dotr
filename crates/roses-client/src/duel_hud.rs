@@ -3134,9 +3134,22 @@ pub struct HudTextures {
     /// The card picture of [`TextureSource::Picture`] (the detail pane's).
     pub picture: Option<Texture>,
     font: Vec<u8>,
+    text: HudText,
+}
+
+/// The live text canvas and its texture: the only part of [`HudTextures`]
+/// that drawing changes.
+#[derive(Clone, Debug)]
+struct HudText {
     canvas: TextCanvas,
     /// The canvas through the text CLUT, and the CLUT it was built with.
     canvas_texture: Option<(Texture, [[u8; 4]; 16])>,
+}
+
+impl Default for HudText {
+    fn default() -> Self {
+        Self { canvas: TextCanvas { width: 0, height: 0, indices: Vec::new() }, canvas_texture: None }
+    }
 }
 
 /// A primitive [`render`] did not draw, and why.
@@ -3207,8 +3220,7 @@ impl HudTextures {
             render_target: None,
             picture: None,
             font,
-            canvas,
-            canvas_texture: None,
+            text: HudText { canvas, canvas_texture: None },
         })
     }
 
@@ -3230,14 +3242,17 @@ impl HudTextures {
 
     /// The composed text canvas (4-bit indices).
     pub fn canvas(&self) -> &TextCanvas {
-        &self.canvas
+        &self.text.canvas
     }
+}
+
+impl HudText {
 
     /// Compose `message` into `line` and refresh that band of the canvas
     /// texture.
-    fn compose(&mut self, line: u8, codes: &[u16], clut: &[[u8; 4]; 16]) -> crate::Result<()> {
+    fn compose(&mut self, font: &[u8], line: u8, codes: &[u16], clut: &[[u8; 4]; 16]) -> crate::Result<()> {
         self.canvas
-            .compose(line, codes, TextFont { cells: &self.font })?;
+            .compose(line, codes, TextFont { cells: font })?;
         let (lines, _) = TextCanvas::measure(codes);
         for k in 0..lines {
             // A multi-line message rewrites its whole bands.
@@ -3294,37 +3309,29 @@ pub fn render_primitives(
     textures: &mut HudTextures,
     target: &mut Target16,
 ) -> Vec<Skipped> {
-    draw_all(prims, tables, textures, target, Some(tables.dimx))
+    let mut text = std::mem::take(&mut textures.text);
+    let skipped = draw_all(prims, tables, textures, &mut text, target, Some(tables.dimx));
+    textures.text = text;
+    skipped
 }
 
 fn draw_all(
     prims: &[Primitive],
     tables: &HudTables,
-    textures: &mut HudTextures,
+    textures: &HudTextures,
+    text: &mut HudText,
     target: &mut Target16,
     dither: Option<u64>,
 ) -> Vec<Skipped> {
     let mut skipped = Vec::new();
-    textures.refresh_canvas(&tables.text_clut, None);
+    text.refresh_canvas(&tables.text_clut, None);
     for (index, p) in prims.iter().enumerate() {
         if p.target != Target::Frame {
             continue;
         }
-        if let TextureSource::TextCanvas {
-            line,
-            message: Some(m),
-        } = p.texture
-        {
-            if line > 0 {
-                let composed = tables
-                    .message(m)
-                    .ok_or_else(|| format!("message {m} not supplied"))
-                    .and_then(|codes| textures.compose(line, codes, &tables.text_clut));
-                if let Err(reason) = composed {
-                    skipped.push(Skipped { index, reason });
-                    continue;
-                }
-            }
+        if let Err(reason) = compose_text(p, tables, &textures.font, text) {
+            skipped.push(Skipped { index, reason });
+            continue;
         }
         let texture = match p.texture {
             TextureSource::None => None,
@@ -3361,7 +3368,7 @@ fn draw_all(
                     continue;
                 }
             },
-            TextureSource::TextCanvas { .. } => textures.canvas_texture.as_ref().map(|(t, _)| t),
+            TextureSource::TextCanvas { .. } => text.canvas_texture.as_ref().map(|(t, _)| t),
             TextureSource::Picture => match &textures.picture {
                 Some(t) => Some(t),
                 None => {
@@ -3420,6 +3427,24 @@ fn draw_all(
     skipped
 }
 
+/// The text a frame primitive's sprite shows, composed into its canvas line
+/// before `p` is drawn.
+fn compose_text(p: &Primitive, tables: &HudTables, font: &[u8], text: &mut HudText) -> Result<(), String> {
+    if let TextureSource::TextCanvas {
+        line,
+        message: Some(m),
+    } = p.texture
+    {
+        if line > 0 {
+            return tables
+                .message(m)
+                .ok_or_else(|| format!("message {m} not supplied"))
+                .and_then(|codes| text.compose(font, line, codes, &tables.text_clut));
+        }
+    }
+    Ok(())
+}
+
 /// The HUD alone as a premultiplied-alpha RGBA8 layer (`width`×`height`
 /// from the window origin) for compositing over another renderer's frame.
 ///
@@ -3463,17 +3488,22 @@ pub fn render_primitives_layer(
         pixels: vec![fill; width * height],
     };
     let (mut black, mut white) = (blank(0), blank(0x7FFF));
-    let skipped = draw_all(prims, tables, textures, &mut black, None);
-    draw_all(prims, tables, textures, &mut white, None);
-    let mut rgba = Vec::with_capacity(width * height * 4);
-    for (&b, &w) in black.pixels.iter().zip(&white.pixels) {
+    let mut text = std::mem::take(&mut textures.text);
+    let skipped = draw_all(prims, tables, textures, &mut text, &mut black, None);
+    draw_all(prims, tables, textures, &mut text, &mut white, None);
+    textures.text = text;
+    // Per pixel: the black pass's colour, and the alpha from the least
+    // spread between the two passes' channels (issue #20: written into a
+    // sized buffer, the same arithmetic).
+    let mut rgba = vec![0u8; width * height * 4];
+    for ((out, &b), &w) in rgba.chunks_exact_mut(4).zip(&black.pixels).zip(&white.pixels) {
         let channel = |p: u16, i: u32| i32::from((p >> (5 * i)) & 31) << 3;
-        let spread = (0..3).map(|i| channel(w, i) - channel(b, i)).min().unwrap();
-        let alpha = (255 - (spread.clamp(0, 248) * 255 + 124) / 248) as u8;
-        for i in 0..3 {
-            rgba.push(channel(b, i) as u8);
-        }
-        rgba.push(alpha);
+        let (b0, b1, b2) = (channel(b, 0), channel(b, 1), channel(b, 2));
+        let spread = (channel(w, 0) - b0).min(channel(w, 1) - b1).min(channel(w, 2) - b2);
+        out[0] = b0 as u8;
+        out[1] = b1 as u8;
+        out[2] = b2 as u8;
+        out[3] = (255 - (spread.clamp(0, 248) * 255 + 124) / 248) as u8;
     }
     (rgba, skipped)
 }
@@ -3704,8 +3734,7 @@ mod tests {
             font: (0..320)
                 .flat_map(|c: usize| std::iter::repeat_n(((c & 15) as u8) * 17, CELL_BYTES))
                 .collect(),
-            canvas: TextCanvas::new(),
-            canvas_texture: None,
+            text: HudText { canvas: TextCanvas::new(), canvas_texture: None },
         }
     }
 
@@ -3736,6 +3765,38 @@ mod tests {
         let alpha = |x: usize, y: usize| layer[(y * 512 + x) * 4 + 3];
         assert_eq!(alpha(100, 50), 255);
         assert_eq!(alpha(256, 300), 0);
+    }
+
+    /// The layer is the black pass's colour with the alpha of the two
+    /// passes' spread (the per-pixel formula as first written), and the
+    /// canvas ends as the second pass leaves it.
+    #[test]
+    fn layer_is_the_two_passes_combined() {
+        let t = tables();
+        let f = frame(&shown(), &t);
+        let mut layered = synthetic_textures();
+        let (layer, skipped) = render_layer(&f, &t, &mut layered, 512, 512);
+        let mut serial = synthetic_textures();
+        let mut text = std::mem::take(&mut serial.text);
+        let mut black = Target16 { width: 512, height: 512, pixels: vec![0; 512 * 512] };
+        let mut white = Target16 { width: 512, height: 512, pixels: vec![0x7FFF; 512 * 512] };
+        let serial_skipped = draw_all(&f.prims, &t, &serial, &mut text, &mut black, None);
+        draw_all(&f.prims, &t, &serial, &mut text, &mut white, None);
+        serial.text = text;
+        let mut expected = Vec::new();
+        for (&b, &w) in black.pixels.iter().zip(&white.pixels) {
+            let channel = |p: u16, i: u32| i32::from((p >> (5 * i)) & 31) << 3;
+            let spread = (0..3).map(|i| channel(w, i) - channel(b, i)).min().unwrap();
+            expected.extend((0..3).map(|i| channel(b, i) as u8));
+            expected.push((255 - (spread.clamp(0, 248) * 255 + 124) / 248) as u8);
+        }
+        assert_eq!(skipped, serial_skipped);
+        assert!(layer == expected, "the layers differ");
+        assert_eq!(layered.canvas().indices, serial.canvas().indices);
+        assert_eq!(
+            layered.text.canvas_texture.as_ref().map(|(t, c)| (&t.texels, c)),
+            serial.text.canvas_texture.as_ref().map(|(t, c)| (&t.texels, c))
+        );
     }
 
     fn shown() -> HudState {

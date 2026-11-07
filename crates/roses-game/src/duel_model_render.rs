@@ -536,6 +536,17 @@ impl ModelMaterial {
     }
 }
 
+/// [`ModelMaterial::set_ndc`] only when the matrix changes: a material taken
+/// mutably is prepared again (its uniform buffer and bind group rebuilt) in
+/// the render world, every update for every unit (issue #20).
+pub(crate) fn set_ndc_if_changed(materials: &mut Assets<ModelMaterial>, handle: &Handle<ModelMaterial>, ndc: Mat4) {
+    if materials.get(handle).is_some_and(|m| m.ndc_from_world != ndc) {
+        if let Some(mut material) = materials.get_mut(handle) {
+            material.set_ndc(ndc);
+        }
+    }
+}
+
 #[derive(Resource)]
 struct ModelRuntime {
     scene: UnitScene,
