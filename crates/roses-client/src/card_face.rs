@@ -82,6 +82,22 @@ pub const MAX_VALUE: i32 = 9999;
 /// Card 0x29F is drawn as the back (large frame entry 7) [F 0x1DBCA4].
 pub const BACK_CARD: u16 = 0x29F;
 pub const BACK_FRAME: usize = 7;
+/// A record the viewer may not see (0x1DA6A0 != 0, with param 0x1E set
+/// and the duel's mode byte 0x1AB8B0(1) = 1): 0x1DBA80 draws only frame
+/// entry 8 + the record's side (+0x44) and ends (0x1DBE8C..0x1DC028) [F].
+pub const HIDDEN_FRAME: usize = 8;
+
+/// The sprite of a hidden record of `side` (0 or 1): frame entry
+/// [`HIDDEN_FRAME`] + side over the whole face [F 0x1DBE8C].
+pub fn hidden_sprites(tables: &FaceTables, size: FaceSize, side: u8) -> Result<Vec<FaceSprite>> {
+    let mode = tables.mode(size);
+    let (w, h) = size.dimensions();
+    let frame = *mode
+        .frames
+        .get(HIDDEN_FRAME + usize::from(side.min(1)))
+        .ok_or("the frame table has no hidden-card entry")?;
+    Ok(vec![descriptor_sprite(frame, [0, 0], [w as i32, h as i32])])
+}
 
 /// The two sizes of the composer (record flag 0x81 bit 4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -745,6 +761,22 @@ impl FaceAssets {
         size: FaceSize,
     ) -> Result<RgbaImage> {
         self.face_with_effect(card, level, attack, defense, None, size)
+    }
+
+    /// A hand record the viewer may not see ([`hidden_sprites`]).
+    pub fn hidden_face(&self, side: u8, size: FaceSize) -> Result<RgbaImage> {
+        let sprites = hidden_sprites(&self.tables, size, side)?;
+        let page = blank_text_page();
+        let lookup = |slot: u8| self.texsys.get(usize::from(slot));
+        compose(
+            &sprites,
+            &FaceTextures {
+                texsys: &lookup,
+                picture: None,
+                text_page: &page,
+            },
+            size,
+        )
     }
 
     /// [`FaceAssets::face`] with the effect frame decided by the caller (a

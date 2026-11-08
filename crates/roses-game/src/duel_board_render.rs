@@ -81,7 +81,6 @@ use roses_game::duel_overlay::{
 };
 use roses_game::duel_play::{self, DuelHud, DuelPlay};
 use roses_game::tutorial::{TutorialScreen, View as TutorialView};
-use roses_core::GridPos;
 use roses_core::card_block::CardBlock;
 use roses_core::duel::ai::pad;
 use roses_core::duel::next_rand31;
@@ -977,10 +976,9 @@ pub struct TutorialRuntime {
     screen: TutorialScreen,
     /// `DuelHud::version` the uploaded composite was built from.
     hud_version: Option<u64>,
-    /// The cell a close-up (0x172DE0 and kin) points the board camera at
-    /// until the script restores the camera.
-    camera_target: Option<GridPos>,
     reported: BTreeSet<String>,
+    /// The message page the camera trace last reported.
+    traced_page: Option<u16>,
 }
 
 /// The lesson's end once the script reported it (next lesson, or the
@@ -1864,12 +1862,23 @@ fn play_tick(
         }
         runtime.trace_pads = [held, held2];
     }
-    // A lesson's close-up points the board camera at the unit's cell (the
-    // original's own close-up camera is not reproduced).
-    let target = tutorial
-        .and_then(|t| t.camera_target)
-        .unwrap_or_else(|| runtime.play.cursor());
+    let target = runtime.play.cursor();
     let radius = std::cell::RefCell::new(models.as_deref_mut());
+    // A lesson's camera requests of this update (close-up, overview, zoom,
+    // save/restore, CURSOR) before the camera follows the cursor.
+    let lesson = runtime.play.tutorial().map(|t| t.lesson.controller());
+    if let (Some(controller), true) = (lesson, tutorial.is_some()) {
+        let ops = runtime.play.last_script.as_ref().map(|s| s.camera.clone()).unwrap_or_default();
+        for note in duel_play::tutorial_camera(
+            &mut state.board_camera,
+            &mut runtime.play,
+            controller,
+            &ops,
+            &|card| radius.borrow_mut().as_mut().and_then(|m| m.radius(card)),
+        ) {
+            eprintln!("Tutorial: {note}");
+        }
+    }
     duel_play::drive_camera(
         &mut state.board_camera,
         &mut runtime.play,
@@ -1966,9 +1975,9 @@ fn end_tick(
 }
 
 /// A practice lesson's presentation (after `play_hud`): the script's
-/// one-shots of this update are played (sounds) or logged (camera requests, the
-/// Exodia event, the Destiny Draw, the lesson's end; the close-up sets the
-/// board camera's target cell), the fade bytes set the scene brightness of
+/// one-shots of this update are played (sounds) or logged (unit model
+/// effects, the Exodia event, the Destiny Draw, the lesson's end; the
+/// camera requests are applied in `play_tick`), the fade bytes set the scene brightness of
 /// the present pass, and the tutorial layer (window, caption, pointer) is
 /// re-rendered when its view changed and composited over the HUD layer.
 fn tutorial_tick(
@@ -1978,6 +1987,7 @@ fn tutorial_tick(
     mut images: ResMut<Assets<Image>>,
     mut presents: ResMut<Assets<PresentMaterial>>,
     mut sound: Option<ResMut<DuelSound>>,
+    board: Option<Res<BoardState>>,
 ) {
     let Some(mut tut) = tutorial else {
         return;
@@ -1986,6 +1996,31 @@ fn tutorial_tick(
     let Some(t) = runtime.play.tutorial() else {
         return;
     };
+    // Test aid (ROSES_TUTORIAL_CAMERA_TRACE=1): the board camera as each
+    // message page opens, to compare with the original's saved states
+    // (the project notes: camera 0x2DF5C0 +0x00 polar, +0x30 target).
+    let page = t.message.as_ref().map(|m| m.page);
+    if page != tut.traced_page {
+        tut.traced_page = page;
+        if let (Some(page), Some(board)) = (page, board.as_ref()) {
+            if std::env::var_os("ROSES_TUTORIAL_CAMERA_TRACE").is_some() {
+                let c = &board.board_camera;
+                eprintln!(
+                    "Tutorial camera: lesson {} step {} page {page}: cursor ({},{}) target ({:.1}, {:.1}, {:.1}) polar ({:.1}, {:.4}, {:.4})",
+                    t.lesson.controller(),
+                    t.step,
+                    c.cursor.0,
+                    c.cursor.1,
+                    c.target[0],
+                    c.target[1],
+                    c.target[2],
+                    c.polar[0],
+                    c.polar[1],
+                    c.polar[2]
+                );
+            }
+        }
+    }
     let fade = f32::from(t.fade[0]) / f32::from(roses_core::duel::script::FADE_VISIBLE);
     let view = TutorialView::of(t);
     let (lesson, step) = (t.lesson.controller(), t.step);
@@ -2005,46 +2040,14 @@ fn tutorial_tick(
         }
         for op in &script.camera {
             match op {
-                CameraOp::CloseUp { card } => {
-                    let cell = runtime
-                        .play
-                        .session
-                        .duel
-                        .units
-                        .iter()
-                        .find(|u| u.card == *card)
-                        .map(|u| u.position);
-                    match cell {
-                        Some(cell) => {
-                            tut.camera_target = Some(cell);
-                            eprintln!(
-                                "Tutorial: lesson {lesson} step {step}: close-up on card {card} at ({},{}): the board camera targets the cell; the original's close-up camera (0x172DE0 and kin, zoom on the model) is not reproduced",
-                                cell.column, cell.row
-                            );
-                        }
-                        None => eprintln!(
-                            "Tutorial: lesson {lesson} step {step}: close-up on card {card}, which is not on the field; camera unchanged"
-                        ),
-                    }
-                }
-                CameraOp::Restore => {
-                    tut.camera_target = None;
-                    note(
-                        &mut tut,
-                        "camera restore (0x280A90): the board camera follows the cursor again"
-                            .into(),
-                    );
-                }
-                CameraOp::Save => note(
-                    &mut tut,
-                    "camera save (0x280B10): nothing to save, the board camera is the port's"
-                        .into(),
-                ),
-                CameraOp::Preset { value } => note(
-                    &mut tut,
-                    format!("camera preset {value} (0x262060) is not reproduced"),
-                ),
-                CameraOp::Zoom => note(&mut tut, "camera zoom (0x281020) is not reproduced".into()),
+                // Applied to the board camera in `play_tick`
+                // (`duel_play::tutorial_camera`).
+                CameraOp::CloseUp { .. }
+                | CameraOp::Restore
+                | CameraOp::Save
+                | CameraOp::Preset { .. }
+                | CameraOp::Zoom
+                | CameraOp::Cursor { .. } => {}
                 CameraOp::UnitFx { side, slot, value }
                 | CameraOp::UnitFx2 { side, slot, value } => note(
                     &mut tut,
@@ -6010,8 +6013,8 @@ pub fn prepare_tutorial_scene(
     let tutorial = TutorialRuntime {
         screen,
         hud_version: None,
-        camera_target: None,
         reported: BTreeSet::new(),
+        traced_page: None,
     };
     scene_for(board_manifest, play, None, Some(tutorial), models)
 }

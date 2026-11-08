@@ -527,21 +527,44 @@ impl<'a, C: CardData + ?Sized, F: FusionData + ?Sized> World<'a, C, F> {
             .is_some_and(|s| s.leader_abilities.contains(&n))
     }
     /// [`Self::ability`] as the aura checks reach it with the owner of a
-    /// hand card's virtual record (side 2): 0x1E1E80(2, 0, n, 0) tests
-    /// group-2 slot 0 ([`crate::duel::Duel::temp_units`]), whose 999 filler
-    /// (card ≥ 0x356) or reset record (slot 0xB) answers 0 in 0x1E1EF0; a
-    /// lifted field unit's copy there has a real card and its effect words
-    /// stand in for the ability row, which is not modelled.
+    /// hand card's virtual record (side 2): 0x273070(n, 2) first asks
+    /// 0x268890(0x58, 0) (`movn` at 0x273094: side 0 for any side ≠ 0),
+    /// then 0x1E1E80(2, 0, n, 0) tests group-2 slot 0
+    /// ([`crate::duel::Duel::temp_units`]) [F 0x273070, 0x1E1E80, 0x1E1F00].
+    /// A reset record (slot 0xB) is null (0); the 999 filler fails the card
+    /// test (≥ 0x356). A real card there (a lifted field unit's copy, state
+    /// 0x44, or a fusion result 0x1D9F50 re-created in slot 0) is read like
+    /// any record: option 0x1C's bit for its +0x44, then the case table
+    /// over its +0x08..+0x2F halfwords at rank 0x2154C0(+0x44, card)
+    /// ([`crate::duel::queries::record_ability`], [`Duel::stored_rank`]).
     pub fn ability_r(&self, n: u8, side: i32) -> R<bool> {
         if side == 2 {
-            return match self.duel.temp_units[0] {
-                Some(t) if t.card != 999 => {
-                    unsupported("0x1E1E80 reads the field unit's copy in group-2 slot 0")
-                }
-                _ => Ok(false),
-            };
+            if self.continuous_count_of(0x58, 0) > 0 {
+                return Ok(false);
+            }
+            return Ok(self.duel.temp_units[0].is_some_and(|t| self.copy_ability(&t, n)));
         }
         Ok(self.ability(n, side))
+    }
+    /// 0x1E1EF0(record, n, 0) on a group-2 record.
+    fn copy_ability(&self, t: &crate::duel::TempUnit, n: u8) -> bool {
+        if t.card >= 0x356 || t.card == 0x29F || n > 16 {
+            return false;
+        }
+        if self.duel.ability_option.unwrap_or(3) & (1u32 << (t.side & 31)) == 0 {
+            return false;
+        }
+        let Some(card) = self.card(t.card) else {
+            return false;
+        };
+        // A 0x1DDFE0 record: entry 0 only for non-monsters.
+        let mut info = card.clone();
+        info.entries = t.entries.unwrap_or_else(|| record_entries(card));
+        crate::duel::queries::record_ability(
+            &crate::duel::queries::entry_halfwords(&info),
+            n,
+            self.duel.stored_rank(t.side, t.card),
+        )
     }
     /// 0x273370(side, col, row): the cell lies in the clipped square around
     /// `side`'s leader (0x1E2310(side, 0), −1 → (255, −1): never), half-size
@@ -558,6 +581,16 @@ impl<'a, C: CardData + ?Sized, F: FusionData + ?Sized> World<'a, C, F> {
     /// 0x1E1910(side, 0): the leader card's byte 0 (from the card record,
     /// never the unit's +0x3E), −1 without a leader.
     pub fn leader_kind(&self, side: i32) -> i32 {
+        if side == 2 {
+            // Group-2 slot 0 through 0x1DE3A0 (+0x45 < 0xB): its card
+            // pointer's byte 0 [F 0x1E1910]; −1 for a reset record and,
+            // as before, for 999 (only read after 0x1E1EF0 said yes).
+            return self
+                .duel
+                .temp_units[0]
+                .and_then(|t| (t.card < 0x356).then(|| self.card(t.card)).flatten())
+                .map_or(-1, |c| i32::from(c.kind));
+        }
         self.unit(side, 0)
             .and_then(|u| self.card(u.card))
             .map_or(-1, |c| i32::from(c.kind))
@@ -565,6 +598,19 @@ impl<'a, C: CardData + ?Sized, F: FusionData + ?Sized> World<'a, C, F> {
     /// 0x1E1B70(side, 0, 0): clamp(level − leader +0x48, 0, 12), −1
     /// without a leader.
     fn leader_level(&self, side: i32) -> i32 {
+        if side == 2 {
+            // 0x1E1BD0 on group-2 slot 0: card level − +0x48, clamped.
+            return self
+                .duel
+                .temp_units[0]
+                .and_then(|t| {
+                    (t.card < 0x356)
+                        .then(|| self.card(t.card))
+                        .flatten()
+                        .map(|c| (i32::from(c.level) - i32::from(t.discount)).clamp(0, 12))
+                })
+                .unwrap_or(-1);
+        }
         self.unit(side, 0)
             .and_then(|u| self.card(u.card).map(|c| (c, u.discount)))
             .map_or(-1, |(c, discount)| {

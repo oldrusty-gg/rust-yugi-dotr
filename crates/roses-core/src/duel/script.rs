@@ -382,6 +382,10 @@ pub enum CameraOp {
     UnitFx { side: u8, slot: u8, value: i32 },
     /// 0x1E2D70(side, slot, value) [H].
     UnitFx2 { side: u8, slot: u8, value: i32 },
+    /// `CURSOR(c,r)` 0x1DFAE0(0, c, r): besides side 0's cursor, the camera
+    /// is placed at once: target the cell (50(c-3), S+0x345, 50(r-3)) via
+    /// 0x1FAF90 and the side's polar S+0x1D0 via 0x1FC570 [F].
+    Cursor { column: u8, row: u8 },
 }
 
 /// What one poll produced besides the key: one-shots for the presentation.
@@ -939,6 +943,7 @@ impl<C: CardData> Ctx<'_, C> {
     /// `CURSOR(c,r)` 0x1DFAE0(0, c, r): side 0's cursor (and camera target).
     pub fn cursor_to(&mut self, column: u8, row: u8) {
         self.ui.cursors[0] = GridPos { column, row };
+        self.camera(CameraOp::Cursor { column, row });
     }
 
     /// `NO_LP0_END=1` 0x1E60E0(1).

@@ -886,3 +886,45 @@ fn the_vs_control_bytes_plan_with_the_generic_module() {
     assert!(!is_ported(26));
     assert!(matches!(run(26).0, Err(crate::duel::DuelError::Unsupported(_))));
 }
+
+#[test]
+fn side_twos_leader_is_the_group_two_copy_read_like_any_record() {
+    // The halt "0x1E1E80 reads the field unit's copy in group-2 slot 0":
+    // 0x273070(n, 2) → 0x268890(0x58, 0), then 0x1E1E80(2, 0, n, 0) →
+    // 0x1E1F00 on the copy: card < 0x356, not 0x29F, option 0x1C's bit for
+    // +0x44, the case table over +0x08..+0x2F at 0x2154C0(+0x44, card) [F].
+    let mut cards = synthetic_cards();
+    cards[12].kind = 4;
+    cards[12].level = 6;
+    let mut duel = duel_with(vec![unit(0, 0, 10, 3, 6), unit(1, 0, 11, 3, 0)], &cards);
+    let cell = GridPos { column: 2, row: 4 };
+    // Entry 2 = (0xFFFF | 0x0000 << 16, 0x0000 | 0x0002 << 16): halfword 8
+    // (#9) is 0xFFFF, halfword 11 (#10, requirement in the low byte) is 2.
+    let copy = TempUnit {
+        entries: Some([None, None, Some([0xFFFF, 0x0002_0000]), None, None]),
+        ..TempUnit::new(cell, 12, 0, 1)
+    };
+    duel.temp_units[0] = Some(copy);
+    let w = World::new(&duel, &cards, &NoTables, 0).unwrap();
+    assert!(!w.ability_r(9, 2).unwrap());
+    // Rank 0 (the stand-in without a block): 0 < 2.
+    assert!(!w.ability_r(10, 2).unwrap());
+    // 0x1E1910 / 0x1E1BD0 on the copy: its card's kind, level − +0x48.
+    assert_eq!(w.leader_kind(2), 4);
+    duel.set_card_ranks(0, [(12, 2)]);
+    let w = World::new(&duel, &cards, &NoTables, 0).unwrap();
+    assert!(w.ability_r(10, 2).unwrap());
+    // Option 0x1C without side 0's bit: 0.
+    duel.ability_option = Some(2);
+    let w = World::new(&duel, &cards, &NoTables, 0).unwrap();
+    assert!(!w.ability_r(10, 2).unwrap());
+    duel.ability_option = None;
+    // The 999 filler and a reset record answer 0.
+    duel.temp_units[0] = Some(TempUnit::new(cell, 999, 0, 0));
+    let w = World::new(&duel, &cards, &NoTables, 0).unwrap();
+    assert!(!w.ability_r(10, 2).unwrap());
+    duel.temp_units[0] = None;
+    let w = World::new(&duel, &cards, &NoTables, 0).unwrap();
+    assert!(!w.ability_r(10, 2).unwrap() && w.leader_kind(2) == -1);
+}
+

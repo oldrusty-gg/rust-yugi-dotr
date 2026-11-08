@@ -1047,6 +1047,7 @@ pub(crate) mod tests {
                 player_side: 0,
                 custom_rules: None,
                 options: None,
+                card_ranks: Default::default(),
             },
             tables,
             executable,

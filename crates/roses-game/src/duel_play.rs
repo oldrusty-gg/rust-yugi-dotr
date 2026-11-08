@@ -90,6 +90,12 @@ pub struct FirstDuel {
     /// switches, bit = side); `None` = 3 / 3 (every campaign duel).
     #[serde(default)]
     pub options: Option<[u32; 2]>,
+    /// 0x2154C0's source per duel side: the saved card block's non-zero
+    /// stored ranks (card, rank), when the game has that side's block (the
+    /// player's; Custom Duel's computer block); `None` leaves the engine's
+    /// stand-in ([`roses_core::duel::Duel::stored_rank`]).
+    #[serde(default)]
+    pub card_ranks: [Option<Vec<(u16, u16)>>; 2],
 }
 
 fn weevil() -> u8 {
@@ -215,6 +221,13 @@ pub fn start(data: &DuelData, seed: u64, computer_player: bool) -> Result<DuelSe
     // The Destiny Draw's rows (0x2B7AF0) and the leaders' ranks (its bonus).
     duel.set_destiny_rows(roses_assets::parse_pal_destiny_rows(&data.executable).map_err(|e| e.to_string())?);
     duel.set_leader_ranks(f.leader_ranks);
+    // 0x2154C0 and param 0x1C as 0x1E1EF0 reads them for group-2 records.
+    for (side, ranks) in (0u8..).zip(&f.card_ranks) {
+        if let Some(ranks) = ranks {
+            duel.set_card_ranks(side, ranks.iter().copied());
+        }
+    }
+    duel.ability_option = f.options.map(|[o28, _]| o28);
     if let Some((lp, sp)) = f.custom_rules {
         duel.set_custom_rules(lp, sp);
     }
@@ -486,6 +499,18 @@ pub fn overlay_input(session: &DuelSession) -> OverlayInput {
     }
 }
 
+/// The unit a move selection (state 0x1D) holds and the position its
+/// +0x57 bit3 shows: the original writes the bit at the L1/R1 press, a
+/// step and Circle (0x1D46E0, 0x1D4678, state 0x1F) and the card turns
+/// over 8 updates while the player still chooses; the engine applies the
+/// position at the confirming Cross [V movement-verified.md 4].
+pub fn held_position(session: &DuelSession) -> Option<(roses_core::UnitId, bool)> {
+    match &session.input.mode {
+        Mode::Move(sel) => Some((sel.unit, sel.defence)),
+        _ => None,
+    }
+}
+
 /// The values of every face-up card image on the board (`UnitInput::face`):
 /// cost, ATK/DEF with the terrain bonus at the unit's cell (at the cursor
 /// for the unit a move selection holds) and the effect frame, through the
@@ -634,6 +659,15 @@ pub struct DuelPlay {
     pub intro: Option<Box<BattleIntro>>,
     /// A camera move the renderer starts once (taken by [`drive_camera`]).
     pub camera_command: Option<CameraMove>,
+    /// A lesson's camera request (close-up, overview, zoom, restore) holds
+    /// the board camera where it put it until the cursor moves (the
+    /// cursor step 0x1DA360 tracks target and side polar back over 8
+    /// updates) or the turn camera runs [F 0x1DA360; O the project notes
+    /// session 225-227: the close-up of step 52 stays while its message
+    /// is shown, the cursor's Up keys bring back (200, pi/2, pi/4)].
+    pub camera_hold: bool,
+    /// `CAMSAVE` 0x280B10: the camera's target and polar in S+0x1B0.
+    pub camera_saved: Option<([f64; 3], [f64; 3])>,
     /// A unit camera the renderer resolves with the unit's model (taken by
     /// [`drive_camera`]).
     pub unit_camera: Option<UnitCamera>,
@@ -906,6 +940,10 @@ pub fn duel_music_track(param1: u8, param2: u32) -> u32 {
         _ => 40,
     }
 }
+
+/// A [`HandFace`] card id for a hidden hand card: `HIDDEN_HAND + side`
+/// (never a card id; drawn by `FaceAssets::hidden_face`).
+pub const HIDDEN_HAND: u16 = 0xFFF0;
 
 /// A battle opening deferred behind a monster effect's presentation.
 type DeferredBattle = (
@@ -1196,6 +1234,8 @@ fn input_sound(state: u8, key: u16, response: &Response) -> Option<u8> {
         0x18 if key & pad::TRIANGLE != 0 => Some(0x10),
         // 0x18: 0x1D4120 after the cursor step [F; emu 011-t11 held Right].
         0x18 | 0x1D | 0x3E if key & arrows != 0 => Some(3),
+        // 0x1D: L1/R1 changed +0x57 bit3 (0x1D47AC) [F].
+        0x1D if key & (pad::L1 | pad::R1) != 0 => Some(9),
         0x43 if key & (pad::LEFT | pad::RIGHT) != 0 => Some(3),
         0x43 if key & (pad::UP | pad::DOWN) != 0 => Some(9),
         0x43 if key & pad::TRIANGLE != 0 => Some(0x10),
@@ -1361,6 +1401,129 @@ pub fn stick_camera(cam: &mut SideCamera, presses: u16, sticks: [u8; 4], active_
     changed.then_some(frames)
 }
 
+/// The unit and yaw bracket a lesson's close-up uses (0x172DE0 lesson 32,
+/// 0x174EC0 lesson 33, 0x176470 lesson 34): each routine maps a fixed list
+/// of cards to a fixed unit handle and a yaw constant; any other card does
+/// nothing but stop the camera tracks [F]. Returns (side, slot, k).
+pub fn lesson_close_up_unit(controller: u8, card: u16) -> Option<(u8, u8, i32)> {
+    match (controller, card) {
+        (32, 3) => Some((1, 1, 0x47FF)),
+        (32, 0x9C) => Some((0, 1, 0xC7FF)),
+        (32, 0) => Some((1, 0, 0x47FF)),
+        (32, 0x3C) => Some((0, 0, 0x47FF)),
+        (33, 0x9C) => Some((0, 1, 0xC7FF)),
+        (33, 0x3A) => Some((0, 0, 0x47FF)),
+        (34, 0x9C) => Some((0, 1, 0xC7FF)),
+        (34, 0x1D) => Some((1, 1, 0x47FF)),
+        (34, 0x170) => Some((0, 1, 0x47FF)),
+        _ => None,
+    }
+}
+
+/// A lesson's close-up camera: an instant cut (frames 0) with a kind 7
+/// track onto the unit's model object and a kind 4 polar (0x1FBAB0) [F]:
+/// r = object +0x10 (0, facing, 0, 0; facing 0x8000 for side 0 objects,
+/// 0 for side 1 [emu CAMERA-TRACKS.md]), distance = r[0] + 0x3F + the
+/// model's radius (object +0x1E4 via 0x1F6A70; 0.0 without an object),
+/// yaw = r[1] + (k - rec+0x30) (+0x10000 - 1 when negative; rec+0x30 is 0
+/// here), pitch = r[2] + 0x1000. Checked against the original: lesson 34
+/// step 52 (Celtic Guardian at (3,4)): polar (81.8, 0x47FF, 0x1000),
+/// target (0, 47.6, 49.9); step 161 (Gyakutenno Megami at (3,5)):
+/// (76.9, 0xC7FF, 0x1000), target (0, 48.5, 100) [O the project notes session
+/// 225, 296]. The target height follows the object's bob (47.6, 48.5);
+/// the port uses 50 as the unit camera does [H].
+pub fn lesson_close_up(side: u8, cell: (u8, u8), k: i32, radius: Option<f32>) -> CameraMove {
+    let [x, z] = crate::duel_board::cell_center(cell.0, cell.1);
+    let angle = |v: i32| f64::from(v as f32 * std::f32::consts::PI / 32768.0);
+    let yaw = side_model_base(side) + k;
+    CameraMove {
+        target: [x, 50.0, z],
+        polar: [
+            f64::from(0x3F as f32 + radius.unwrap_or(0.0)),
+            angle(yaw).rem_euclid(std::f64::consts::TAU),
+            angle(0x1000),
+        ],
+        frames: 0,
+    }
+}
+
+/// A lesson's camera requests of this update ([`ScriptFrame::camera`], in
+/// the script's order), applied to the board camera before
+/// [`drive_camera`]: `CURSOR` places the camera on the cell with the
+/// side's polar (0x1DFAE0), `CAMSAVE` keeps target and polar (0x280B10),
+/// `CAMRESTORE` snaps back to them (0x280A90 with frames 0 at every call
+/// site), the close-up cuts to the unit (`lesson_close_up`), `CAMPRESET(v)`
+/// is the overview 0x262060(v), `CAMZOOM` 0x281020(0) doubles the live
+/// distance at once [F]. Every request but `CURSOR` holds the camera until
+/// the cursor moves ([`DuelPlay::camera_hold`]). Returns notes for what is
+/// not reproduced.
+pub fn tutorial_camera(
+    camera: &mut BoardCamera,
+    play: &mut DuelPlay,
+    controller: u8,
+    ops: &[roses_core::duel::script::CameraOp],
+    radius: &dyn Fn(u16) -> Option<f32>,
+) -> Vec<String> {
+    use roses_core::duel::script::CameraOp;
+    let mut notes = Vec::new();
+    let snap = |camera: &mut BoardCamera, target: [f64; 3], polar: [f64; 3]| {
+        camera.target = target;
+        camera.polar = polar;
+        camera.track = None;
+        camera.polar_track = None;
+    };
+    for &op in ops {
+        match op {
+            CameraOp::Cursor { column, row } => {
+                camera.cursor = (column, row);
+                let polar = play.board_polar();
+                snap(camera, crate::duel_board::cursor_target((column, row)), polar);
+                play.camera_hold = false;
+            }
+            CameraOp::Save => play.camera_saved = Some((camera.target, camera.polar)),
+            CameraOp::Restore => {
+                if let Some((target, polar)) = play.camera_saved {
+                    snap(camera, target, polar);
+                    play.camera_hold = true;
+                }
+            }
+            CameraOp::CloseUp { card } => {
+                let Some((side, slot, k)) = lesson_close_up_unit(controller, card) else {
+                    notes.push(format!("close-up on card {card}: not one of lesson {controller}'s close-ups; the camera stays"));
+                    continue;
+                };
+                let unit = play.session.duel.units.iter().find(|u| (u.side, u.slot) == (side, slot)).map(|u| (u.position, u.card));
+                match unit {
+                    Some((cell, shown)) => {
+                        let m = lesson_close_up(side, (cell.column, cell.row), k, radius(shown));
+                        snap(camera, m.target, m.polar);
+                        play.camera_hold = true;
+                    }
+                    None => notes.push(format!("close-up on card {card}: unit ({side},{slot}) is not on the field; the camera stays")),
+                }
+            }
+            CameraOp::Preset { value } => {
+                let (_, m) = camera_for_step(
+                    crate::duel_monster_fx::CameraStep::Overview(u32::from(value)),
+                    play.session.duel.active,
+                    play.cursor(),
+                );
+                if let Some(m) = m {
+                    camera.track_to(m.target, m.polar, m.frames);
+                    play.camera_hold = true;
+                }
+            }
+            CameraOp::Zoom => {
+                camera.polar[0] *= 2.0;
+                camera.polar_track = None;
+                play.camera_hold = true;
+            }
+            CameraOp::UnitFx { .. } | CameraOp::UnitFx2 { .. } => {}
+        }
+    }
+    notes
+}
+
 /// Drive the board camera for this update: a pending camera move starts
 /// once; while a battle opening plays the camera is left to its tracks;
 /// otherwise it follows `target` (the cursor) with the active side's
@@ -1405,10 +1568,28 @@ pub fn drive_camera(
     let side = play.session.duel.active;
     if play.camera_side != Some(side) {
         play.camera_side = Some(side);
+        play.camera_hold = false;
         let c = (target.column, target.row);
         camera.cursor = c;
         camera.track_to(crate::duel_board::cursor_target(c), play.board_polar(), TURN_CAMERA_FRAMES);
         play.board_track = play.board_track.max(TURN_CAMERA_FRAMES - 1);
+        return;
+    }
+    // A lesson's camera request holds until the cursor moves; the cursor
+    // step 0x1DA360(8, x, z) then tracks the target to the cell and the
+    // polar to the side's setting S+0x1D0, both over 8 updates [F].
+    if play.camera_hold {
+        if (target.column, target.row) == camera.cursor {
+            return;
+        }
+        play.camera_hold = false;
+        follow_cursor(camera, target);
+        camera.polar_track = Some(crate::duel_board::PolarTrack {
+            start: camera.polar,
+            end: play.board_polar(),
+            frames: crate::duel_board::CURSOR_TRACK_FRAMES,
+            elapsed: 0,
+        });
         return;
     }
     let rest = play.board_polar();
@@ -1561,6 +1742,8 @@ impl DuelPlay {
             walk: None,
             intro: None,
             camera_command: None,
+            camera_hold: false,
+            camera_saved: None,
             camera_orbit: None,
             side_cameras: [SideCamera::for_side(0), SideCamera::for_side(1)],
             camera_side: None,
@@ -2541,7 +2724,11 @@ impl DuelPlay {
         }
         let mut input = overlay_input(&self.session);
         add_board_faces(&mut input, &self.session, &self.data.catalogue, &self.hud_context());
+        let held = held_position(&self.session);
         for (unit, u) in input.units.iter_mut().zip(&self.session.duel.units) {
+            if let Some((_, d)) = held.filter(|(id, _)| *id == u.id) {
+                unit.defence = d;
+            }
             if let Some(&p55) = self.sideways.get(&u.id) {
                 if p55 != 0 && p55 != 0xFF {
                     unit.sideways = Some(p55);
@@ -2961,6 +3148,27 @@ impl DuelPlay {
     /// Online: the acting side is the other seat and its hand is hidden
     /// (Card Display HIDE), or this screen is a spectator's (no hand is
     /// known): the copy holds only placeholders for it.
+    /// 0x1DA6A0 on the active side's hand records with viewer d3c (the
+    /// active side), as 0x1DBA80 asks it when param 0x1E is set and the
+    /// mode byte 0x1AB8B0(1) is 1 (both so in every saved duel state):
+    /// with param 0x1D's bit of the side set (3 in every saved duel) a hand
+    /// is hidden when a computer side acts against a pad side, i.e. the
+    /// computer's own hand in a story or free duel; without it unless R2 is
+    /// held [F; `Query::hidden`]. Offline duels only (online:
+    /// [`DuelPlay::unknown_hand`]). Returns the side whose hand is hidden.
+    pub fn hand_hidden(&self) -> Option<u8> {
+        if self.online.is_some() || self.multi.is_some() {
+            return None;
+        }
+        use roses_core::duel::queries::{Query, Record};
+        let duel = &self.session.duel;
+        let side = duel.active;
+        let card = *duel.sides.get(usize::from(side))?.hand.first()?;
+        let ctx = self.hud_context();
+        let q = Query::new(duel, &self.data.catalogue, &ctx);
+        q.hidden(Record::Hand { side, slot: 1, card }, side).then_some(side)
+    }
+
     pub fn unknown_hand(&self) -> bool {
         self.online.as_ref().is_some_and(|l| {
             let side = self.session.duel.active;
@@ -4368,10 +4576,19 @@ impl DuelPlay {
         }
         // The unit controller turns a card toward its position, 0x20 per
         // update (+0x55) [F 0x1DE540]; a new card starts at its position.
+        // The unit a move selection holds turns toward the selection's
+        // position: L1/R1, a step and Circle write +0x57 bit3 at once
+        // (0x1D46E0, 0x1D4678, state 0x1F), before the confirming Cross
+        // [V movement-verified.md 4].
         let units = &self.session.duel.units;
+        let held = held_position(&self.session);
         self.sideways.retain(|id, _| units.iter().any(|u| u.id == *id));
         for u in units.iter().filter(|u| u.slot != 0) {
-            let target = if u.defence { 0xFFu8 } else { 0 };
+            let defence = match held {
+                Some((id, d)) if id == u.id => d,
+                _ => u.defence,
+            };
+            let target = if defence { 0xFFu8 } else { 0 };
             let p = self.sideways.entry(u.id).or_insert(target);
             *p = match target.cmp(p) {
                 std::cmp::Ordering::Greater => p.saturating_add(0x20),
@@ -5211,7 +5428,7 @@ impl DuelPlay {
                 let hud = if t.hud_flag {
                     ""
                 } else {
-                    " [HUD hidden; camera close-up not reproduced]"
+                    " [HUD hidden]"
                 };
                 format!(
                     "Roses tutorial lesson {} (controller {}) step {}/{}{page}{hud}",
@@ -6138,10 +6355,16 @@ impl DuelHud {
         self.hand.clear();
         // Online, the other seat's hidden hand: only placeholders are known
         // here, so its cards show their back (never a stand-in face).
+        // Offline, a hand the viewer may not see (a computer's, facing a
+        // pad: `DuelPlay::hand_hidden`) is composed as the side's hidden
+        // card (`card_face::hidden_sprites`) [F 0x1DBA80, 0x1DA6A0].
         let unknown_hand = play.unknown_hand();
+        let hidden_hand = play.hand_hidden();
         let shown = |face: HandFace| {
             if unknown_hand {
                 HandFace { card: card_face::BACK_CARD, level: 0, attack: 0, defence: 0 }
+            } else if let Some(side) = hidden_hand {
+                HandFace { card: HIDDEN_HAND + u16::from(side), level: 0, attack: 0, defence: 0 }
             } else {
                 face
             }
@@ -6238,7 +6461,11 @@ impl DuelHud {
                 );
                 let face = faces.sized.entry(key).or_insert_with(|| {
                     let f = key.0;
-                    match faces.assets.face(f.card, f.level, f.attack, f.defence, size) {
+                    let image = match f.card.checked_sub(HIDDEN_HAND) {
+                        Some(side) => faces.assets.hidden_face(side as u8, size),
+                        None => faces.assets.face(f.card, f.level, f.attack, f.defence, size),
+                    };
+                    match image {
                         Ok(image) => Some(image),
                         Err(e) => {
                             eprintln!("Duel HUD: card face {} not drawn: {e}", f.card);
@@ -6500,6 +6727,7 @@ mod tests {
                 player_side,
                 custom_rules: None,
                 options: None,
+                card_ranks: Default::default(),
             },
             tables,
             executable,
@@ -6560,6 +6788,7 @@ mod tests {
                 player_side: 0,
                 custom_rules: None,
                 options: None,
+                card_ranks: Default::default(),
             },
             tables,
             executable,
@@ -6602,9 +6831,11 @@ mod tests {
     }
 
     /// Recorded once; both builds must give them.
+    /// 8 Nov 2026: seed 1 re-recorded for the group-2 records' new +0x44 /
+    /// +0x48 JSON fields; with them zeroed the old hash came out (same play).
     /// (After 30,000 updates the synthetic decks are 16 to 18 rounds in.)
     const OFFLINE_DUEL_HASHES: [(u64, &str); 4] = [
-        (1, "1c28e7aa5ddaa6de0d20c313c76ce2f2dad65c8e48ce3044d995154a6c3c733c"),
+        (1, "523cad1a5cc361a1dc093f97fc67d1bdd02a1663c78e4c0a5644b53095d19a92"),
         (2, "5dd679634426b3ef60517218220890ebcf08ab5160a9e2af7d80529f61bf69b3"),
         (3, "c35452830085d7a87c3adfdb235fbeca728ccc6de680bb51e30d085f9812a2ad"),
         (7, "a9918230df03c0559b000ed112a558310c4f088461fb466e96e9933c5afe48bb"),
@@ -7216,6 +7447,132 @@ mod tests {
             cells.push(camera.cursor);
         }
         assert_eq!(cells, [(4, 4), (5, 3), (5, 2), (5, 1)]);
+    }
+
+    /// R1 in a move selection turns the held card sideways at once, over
+    /// 8 updates, before the confirming Cross (the original writes +0x57
+    /// bit3 at the press, 0x1D46E0; the port had waited for the Cross);
+    /// Circle turns it back; Cross keeps it [V movement-verified.md 4].
+    #[test]
+    fn r1_turns_the_held_card_to_defence_before_the_confirmation() {
+        use roses_core::duel::ai::pad as bits;
+        let mut play = stick_play();
+        let leader = play.session.duel.units.iter().find(|u| (u.side, u.slot) == (0, 0)).unwrap().position;
+        let cell = GridPos { column: leader.column, row: leader.row - 1 };
+        let s0 = &play.session.duel.sides[0];
+        let card = *s0.hand.first().or(s0.deck.first()).expect("a card of side 0");
+        assert!(roses_core::duel::CardData::card(&play.data.catalogue, card).is_some_and(|c| c.is_monster()));
+        let mut events = Vec::new();
+        let id = play
+            .session
+            .duel
+            .script_place(0, card, cell, &play.data.catalogue, &mut events)
+            .unwrap()
+            .expect("an empty cell");
+        let settle = |play: &mut DuelPlay, key: u16| {
+            play.update_pads([key, 0]);
+            for _ in 0..16 {
+                play.update_pads([0, 0]);
+            }
+        };
+        let p55 = |play: &DuelPlay| play.sideways.get(&id).copied();
+        let drawn = |play: &DuelPlay| play.overlay_input().units.iter().find(|u| (u.cell[0], u.cell[1]) == (cell.column, cell.row)).map(|u| u.defence);
+        settle(&mut play, 0);
+        assert_eq!(p55(&play), Some(0));
+        settle(&mut play, bits::UP);
+        assert_eq!(play.cursor(), cell);
+        settle(&mut play, bits::CROSS);
+        assert_eq!(play.session.input.mode.state(), 0x1D);
+        // R1: 0x20 per update from the press, the unit still in attack in
+        // the rules until Cross.
+        play.update_pads([bits::R1, 0]);
+        assert_eq!(play.audio.last(), Some(&crate::duel_audio::AudioCue::Se { slot: 0, id: 9, skip: false }));
+        let mut seen = Vec::new();
+        for _ in 0..9 {
+            play.update_pads([0, 0]);
+            seen.push(p55(&play).unwrap());
+        }
+        assert_eq!(seen, [0x20, 0x40, 0x60, 0x80, 0xA0, 0xC0, 0xE0, 0xFF, 0xFF]);
+        assert!(!play.session.duel.unit(id).unwrap().defence);
+        assert_eq!(drawn(&play), Some(true));
+        // Circle: back upright over 8 updates.
+        settle(&mut play, bits::CIRCLE);
+        assert_eq!((p55(&play), drawn(&play)), (Some(0), Some(false)));
+        // R1 then Cross: the rules take defence, the card stays sideways.
+        settle(&mut play, bits::CROSS);
+        settle(&mut play, bits::R1);
+        settle(&mut play, bits::CROSS);
+        assert!(play.session.duel.unit(id).unwrap().defence);
+        assert_eq!((p55(&play), drawn(&play)), (Some(0xFF), Some(true)));
+    }
+
+    /// The lesson close-up as the original's saved states show it (lesson
+    /// 34: step 52 Celtic Guardian (0,1) at (3,4), radius 18.8; step 161
+    /// Gyakutenno Megami (0,1) at (3,5), radius 13.9) [O the project notes
+    /// session 225, 296].
+    #[test]
+    fn lesson_close_ups_match_the_originals_saved_cameras() {
+        assert_eq!(lesson_close_up_unit(34, 0x9C), Some((0, 1, 0xC7FF)));
+        assert_eq!(lesson_close_up_unit(34, 0x170), Some((0, 1, 0x47FF)));
+        assert_eq!(lesson_close_up_unit(34, 21), None);
+        let celtic = lesson_close_up(0, (3, 4), 0xC7FF, Some(18.8));
+        assert!((celtic.polar[0] - 81.8).abs() < 0.01, "{:?}", celtic.polar);
+        assert!((celtic.polar[1] - 1.7671).abs() < 1e-3, "{:?}", celtic.polar);
+        assert!((celtic.polar[2] - 0.3927).abs() < 1e-3, "{:?}", celtic.polar);
+        assert_eq!((celtic.target[0], celtic.target[2], celtic.frames), (0.0, 50.0, 0));
+        let megami = lesson_close_up(0, (3, 5), 0x47FF, Some(13.9));
+        assert!((megami.polar[0] - 76.9).abs() < 0.01);
+        assert!((megami.polar[1] - 4.9086).abs() < 1e-3, "{:?}", megami.polar);
+        assert_eq!(megami.target[2], 100.0);
+    }
+
+    /// A lesson's close-up stays on the unit while the cursor stays (the
+    /// port had pointed the camera at a stale cell until a restore and
+    /// ignored the script's cursor), the cursor's next step brings the
+    /// side's polar back over 8 updates, CURSOR snaps to its cell, and
+    /// CAMRESTORE snaps back to the CAMSAVE camera.
+    #[test]
+    fn lesson_close_ups_hold_until_the_cursor_moves() {
+        use roses_core::duel::script::CameraOp;
+        let mut play = stick_play();
+        let leader = play.session.duel.units.iter().find(|u| (u.side, u.slot) == (0, 0)).unwrap().position;
+        let mut camera = crate::duel_board::BoardCamera::snapped((leader.column, leader.row));
+        let none = |_| None;
+        // Settle the turn camera first.
+        for _ in 0..64 {
+            drive_camera(&mut camera, &mut play, leader, &none);
+            camera.tick();
+        }
+        let rest = play.board_polar();
+        assert_eq!((camera.polar, camera.cursor), (rest, (leader.column, leader.row)));
+        let before = (camera.target, camera.polar);
+        // Lesson 32's close-up on card 0x3C is the side-0 leader (0,0).
+        tutorial_camera(&mut camera, &mut play, 32, &[CameraOp::Save, CameraOp::CloseUp { card: 0x3C }], &none);
+        let close = lesson_close_up(0, (leader.column, leader.row), 0x47FF, None);
+        assert_eq!((camera.target, camera.polar), (close.target, close.polar));
+        for _ in 0..40 {
+            drive_camera(&mut camera, &mut play, leader, &none);
+            camera.tick();
+        }
+        assert_eq!((camera.target, camera.polar), (close.target, close.polar), "held while the cursor stays");
+        // The cursor steps: target and polar go back over 8 updates.
+        let up = GridPos { column: leader.column, row: leader.row - 1 };
+        let mut updates = 0;
+        loop {
+            drive_camera(&mut camera, &mut play, up, &none);
+            camera.tick();
+            updates += 1;
+            if !camera.moving() {
+                break;
+            }
+        }
+        assert_eq!(updates, crate::duel_board::CURSOR_TRACK_FRAMES);
+        assert_eq!((camera.target, camera.polar), (crate::duel_board::cursor_target((up.column, up.row)), rest));
+        // CURSOR(c,r) snaps; CAMRESTORE snaps to the saved camera.
+        tutorial_camera(&mut camera, &mut play, 32, &[CameraOp::Cursor { column: 3, row: 3 }], &none);
+        assert_eq!((camera.cursor, camera.target, camera.polar), ((3, 3), crate::duel_board::cursor_target((3, 3)), rest));
+        tutorial_camera(&mut camera, &mut play, 32, &[CameraOp::CloseUp { card: 0x3C }, CameraOp::Restore], &none);
+        assert_eq!((camera.target, camera.polar), before);
     }
 
     #[test]

@@ -378,3 +378,51 @@ fn a_face_up_magic_card_onto_an_enemy_card_destroys_it_and_activates_there() {
     assert_eq!(d1.terrain_at(p(3, 1)), terrain::NORMAL);
     assert_eq!(graves(&d1), (vec![FIELD], vec![]));
 }
+
+#[test]
+fn a_set_trap_revealed_with_r2_commits_face_up_and_stays_a_trap() {
+    // R2 in state 0x1D has no class test (0x1D46E0); 0x253D60 phase 0
+    // returns 0x100 for kinds 3 / 4 (0x253EA4..0x253EBC): no activation,
+    // the trap commits face-up and acted (0x1D60D8) and stays [F]. The
+    // player's "revealing set card 804" halt.
+    let mut d = board();
+    let t = put(&mut d, SHADOW, 0, p(3, 5), false, false);
+    let (d1, events) = act(&d, t, vec![], true, None);
+    let r = u(&d1, t);
+    assert!(r.face_up && r.committed_face_up && r.acted);
+    assert_eq!(r.position, p(3, 5));
+    assert!(!events.iter().any(|e| matches!(e, DuelEvent::Activated { .. })));
+    // Revealed with one step.
+    let (d1, _) = act(&d, t, vec![p(3, 4)], true, None);
+    assert_eq!(u(&d1, t).position, p(3, 4));
+    assert!(u(&d1, t).committed_face_up);
+    // 0x269A84: a committed face-up trap is marked acted at its side's
+    // turn start, so it never acts again ("acting with face-up trap card").
+    let (d1, _) = act(&d, t, vec![], true, None);
+    let (d2, _) = d1.apply(0, &DuelCommand::EndTurn, &cards()).unwrap();
+    let (d3, _) = d2.apply(1, &DuelCommand::EndTurn, &cards()).unwrap();
+    assert_eq!(d3.active, 0);
+    assert!(u(&d3, t).acted);
+    // ...and it still answers its trigger (any face, 0x26C4B0): the enemy's
+    // Shadow of Eyes revealed now catches a unit confirming in defence.
+    let mut e = board();
+    let w = put(&mut e, WARRIOR, 0, p(4, 5), true, false);
+    let s = put(&mut e, SHADOW, 1, p(5, 0), true, false);
+    let (e1, _) = act(&e, w, vec![], false, Some(true));
+    assert!(!u(&e1, w).defence && u(&e1, s).face_up);
+}
+
+#[test]
+fn a_revealed_trap_moving_onto_an_enemy_card_destroys_it_like_a_set_card() {
+    // The card-onto-card branch of 0x248130 does not read the face; only
+    // kinds 1 / 5 go through 0x253D60 at the battle exit (0x24CB1C).
+    let mut d = board();
+    let t = put(&mut d, SHADOW, 0, p(3, 5), false, false);
+    let foe = put(&mut d, FIELD, 1, p(3, 4), false, false);
+    let (d1, _) = act(&d, t, vec![p(3, 4)], true, None);
+    assert!(d1.unit(foe).is_none());
+    assert_eq!(u(&d1, t).position, p(3, 4));
+    let (d0, _) = act(&d, t, vec![p(3, 4)], false, None);
+    assert!(d0.unit(foe).is_none());
+    assert_eq!(u(&d0, t).position, u(&d1, t).position);
+}

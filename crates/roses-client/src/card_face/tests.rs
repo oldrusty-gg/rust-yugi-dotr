@@ -124,6 +124,22 @@ fn effect_monsters_use_the_sixth_frame_after_their_category_and_spells_have_no_v
     assert_eq!(s[2].uv, t.icons[6].uv.map(u32::from));
 }
 
+/// A hidden record (0x1DA6A0) draws only frame entry 8 + side over the
+/// whole face, in both sizes [F 0x1DBE8C].
+#[test]
+fn hidden_records_draw_only_their_sides_hidden_frame() {
+    let t = tables();
+    for size in [FaceSize::Large, FaceSize::Small] {
+        for side in 0..2u8 {
+            let sprites = hidden_sprites(&t, size, side).unwrap();
+            let frame = t.mode(size).frames[HIDDEN_FRAME + usize::from(side)];
+            let (w, h) = size.dimensions();
+            assert_eq!(sprites, vec![descriptor_sprite(frame, [0, 0], [w as i32, h as i32])]);
+            assert_ne!(frame, t.mode(size).frames[BACK_FRAME]);
+        }
+    }
+}
+
 #[test]
 fn composing_blends_and_marks_drawn_pixels_opaque() {
     let mut frame = RgbaImage {

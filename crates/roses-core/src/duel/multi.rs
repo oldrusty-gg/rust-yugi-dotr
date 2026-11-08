@@ -295,6 +295,8 @@ impl Duel {
             rng: 0,
             destiny_rows: None,
             leader_ranks: vec![0; n],
+            card_ranks: Vec::new(),
+            ability_option: None,
             records: Default::default(),
             chain_bound: Default::default(),
             deck_stranded: vec![Vec::new(); n],

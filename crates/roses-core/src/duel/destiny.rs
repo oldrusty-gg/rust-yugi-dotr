@@ -25,6 +25,39 @@ impl Duel {
         self.leader_ranks = ranks.to_vec();
     }
 
+    /// `side`'s saved card block ranks (0x2154C0 by card id, 0..0x2AB;
+    /// zeros may be left out).
+    pub fn set_card_ranks(&mut self, side: u8, ranks: impl IntoIterator<Item = (u16, u16)>) {
+        let side = usize::from(side);
+        if self.card_ranks.len() <= side {
+            self.card_ranks.resize(side + 1, None);
+        }
+        self.card_ranks[side] = Some(ranks.into_iter().filter(|&(_, r)| r != 0).collect());
+    }
+
+    /// 0x2154C0(side, card): the stored rank of `card` in `side`'s block,
+    /// −1 for 0x29F (read as 999) and ids >= 0x2AB [F card_block.rs].
+    /// From [`Self::card_ranks`] when the creator supplied the block;
+    /// otherwise [H] the stand-in `duel_play::first_duel_rank` uses: the
+    /// side's leader card at [`Self::leader_ranks`], every other card 0
+    /// (a card's rank before any experience; the computer side's block
+    /// contents are not traced).
+    pub fn stored_rank(&self, side: u8, card: u16) -> i32 {
+        if card == 0x29F || card >= super::RANKED_CARDS {
+            return -1;
+        }
+        if let Some(Some(table)) = self.card_ranks.get(usize::from(side)) {
+            return i32::from(table.get(&card).copied().unwrap_or(0));
+        }
+        let leader = self.units.iter().find(|u| u.side == side && u.slot == 0);
+        match leader {
+            Some(l) if l.card == card => {
+                i32::from(self.leader_ranks.get(usize::from(side)).copied().unwrap_or(0))
+            }
+            _ => 0,
+        }
+    }
+
     /// "Armed" as every reader tests it: `deck > 0 && v != 0 && !(v & 0x80)`.
     fn destiny_armed(&self, s: u8) -> bool {
         let side = &self.sides[usize::from(s)];

@@ -546,8 +546,9 @@ fn set_cards_cost_nothing_use_other_slots_and_block_unverified_play() {
     );
     let trap = d.unit(trap.id).unwrap();
     assert!(trap.acted && trap.committed_defence && !trap.face_up);
-    // A set card moves one step (MONSTER-EFFECTS.md §3.2); revealing a trap
-    // is not traced.
+    // A set card moves one step (MONSTER-EFFECTS.md §3.2); a trap revealed
+    // with R2 commits face-up and acted (0x253D60 phase 0 returns 0x100 for
+    // kinds 3 / 4), see traps_field_tests.rs.
     let mut fresh = d.clone();
     fresh.units.iter_mut().for_each(|u| u.acted = false);
     let (moved, _) = fresh
@@ -574,7 +575,7 @@ fn set_cards_cost_nothing_use_other_slots_and_block_unverified_play() {
             },
             &cards()
         ),
-        Err(DuelError::Unsupported(_))
+        Ok((ref r, _)) if r.unit(trap.id).is_some_and(|u| u.face_up && u.committed_face_up && u.acted)
     ));
     assert_eq!(d.reachable(trap.id, &cards()).unwrap().len(), 3);
     let (d, _) = run(&d, 1, DuelCommand::EndTurn);
@@ -2141,12 +2142,14 @@ fn offline_computer_duels_are_the_same_with_and_without_the_online_feature() {
     assert_eq!(hashes, expected.to_vec());
 }
 
-/// Recorded once (both builds give these).
+/// Recorded once (both builds give these). 8 Nov 2026: seeds 2..5 re-recorded
+/// for the group-2 records' new +0x44 / +0x48 fields in the JSON; with those
+/// zeroed before hashing, the old values came out unchanged (same play).
 const OFFLINE_DUEL_HASHES: [(u64, u64); 6] = [
     (1, 0xe722e0c8680e593a),
-    (2, 0x88e1a4c6df29dc88),
-    (3, 0x474d3d7500d3b767),
-    (4, 0xf92b8158bf6ad5a6),
-    (5, 0x3b4fab20b4d57e21),
+    (2, 0xc8048472ba423a92),
+    (3, 0x7c372f41eccc3327),
+    (4, 0x2e9c2d50ba02969e),
+    (5, 0xf1b360d40eba783d),
     (6, 0x0a675bb6d46272be),
 ];

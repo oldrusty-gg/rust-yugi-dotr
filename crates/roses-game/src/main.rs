@@ -1569,6 +1569,14 @@ fn enter_first_duel(world: &mut bevy::ecs::world::World) -> Result<(), String> {
             None
         }
     };
+    // 0x2154C0 reads BLK(side): the player's block on the player's side and
+    // Custom Duel's computer block on side 1 (a story opponent's block is
+    // not traced: the engine's stand-in).
+    let player_side = usize::from(data.first_duel.player_side.min(1));
+    data.first_duel.card_ranks[player_side] = Some(game::block_ranks(&player_block));
+    if let Some(block) = &custom_block {
+        data.first_duel.card_ranks[1 - player_side] = Some(game::block_ranks(block));
+    }
     let leaders = [data.first_duel.sides[0].leader, data.first_duel.sides[1].leader];
     world.resource_mut::<GameFlow>().duel_leaders = Some(leaders);
     let flow = world.resource::<GameFlow>();
@@ -3790,15 +3798,17 @@ fn run() -> std::result::Result<(), String> {
             Some("--capture-game-scene") if capture_game_scene.is_none() => {
                 let value = args
                     .next()
-                    .ok_or("--capture-game-scene requires map, story or duel")?;
+                    .ok_or("--capture-game-scene requires map, story, duel or tutorial")?;
                 capture_game_scene = Some(match value.to_str() {
                     Some("map") => GameScene::Map,
                     // A story stage played from the campaign map (11020).
                     Some("story") => GameScene::Opening,
                     Some("duel") => GameScene::Duel,
+                    // A practice lesson (with --tutorial-ticks).
+                    Some("tutorial") => GameScene::Tutorial,
                     Some("map-editor") => GameScene::MapEditor,
                     Some("online") if roses_game::extras() => GameScene::Online,
-                    _ => return Err("--capture-game-scene requires map, story or duel".into()),
+                    _ => return Err("--capture-game-scene requires map, story, duel or tutorial".into()),
                 });
             }
             Some("--capture-map-event") if capture_map_event.is_none() => {
@@ -3982,7 +3992,7 @@ fn run() -> std::result::Result<(), String> {
             Some("--help") => {
                 println!(
                     "roses-bevy-scene --duel-board <duel-board manifest.json> [--help]  (original duel board; see --duel-board --help)
-roses-bevy-scene --game <game.json> [--research-root <workspace>] [--start-stage ...] [--replay ...] [--map-replay none*120,up*5,cross,...] [--end-replay none*70,cross,... ] [--exit-at-map] [--game-seed N] [--game-computer-player] [--tutorial-lesson 1|2|3] [--tutorial-auto] [--tutorial-ticks N] [--exit-at-story] [--story-auto] [--map-save <CampaignSave.json>] [--capture <new.png> --capture-game-scene map|story|duel [--capture-map-event E [--capture-map-updates N]]]  (the connected game; story 11000 continues at map event 100 (the voyage to Brest) and 11020 at 101 (the voyage to Milford Haven, reveal 102, free map); --capture-game-scene story captures the story stage the map plays (11020); --capture-map-event/--capture-map-updates hold a map capture until the map has spent N updates at event E; --map-save starts the map from that save once the replay reaches it (test aid); --story-auto pages the map's story events (Brest, Bosworth, Stonehenge) with Cross every eighth update; --map-replay scripts the campaign map's pad as synthetic key presses (one frame late), --end-replay scripts the result screens' and reels' pad, --exit-at-map quits once the map returns after the duel; the practice choice Yes plays the scripted tutorial on the duel board: --tutorial-lesson starts the series at that lesson, --tutorial-auto pages its messages (a fresh Cross on every fifth accepting poll), --tutorial-ticks runs N updates of the first lesson before its first frame, --exit-at-story quits once the story resumes at event 10060)
+roses-bevy-scene --game <game.json> [--research-root <workspace>] [--start-stage ...] [--replay ...] [--map-replay none*120,up*5,cross,...] [--end-replay none*70,cross,... ] [--exit-at-map] [--game-seed N] [--game-computer-player] [--tutorial-lesson 1|2|3] [--tutorial-auto] [--tutorial-ticks N] [--exit-at-story] [--story-auto] [--map-save <CampaignSave.json>] [--capture <new.png> --capture-game-scene map|story|duel|tutorial [--capture-map-event E [--capture-map-updates N]]]  (the connected game; story 11000 continues at map event 100 (the voyage to Brest) and 11020 at 101 (the voyage to Milford Haven, reveal 102, free map); --capture-game-scene story captures the story stage the map plays (11020); --capture-map-event/--capture-map-updates hold a map capture until the map has spent N updates at event E; --map-save starts the map from that save once the replay reaches it (test aid); --story-auto pages the map's story events (Brest, Bosworth, Stonehenge) with Cross every eighth update; --map-replay scripts the campaign map's pad as synthetic key presses (one frame late), --end-replay scripts the result screens' and reels' pad, --exit-at-map quits once the map returns after the duel; the practice choice Yes plays the scripted tutorial on the duel board: --tutorial-lesson starts the series at that lesson, --tutorial-auto pages its messages (a fresh Cross on every fifth accepting poll), --tutorial-ticks runs N updates of the first lesson before its first frame (capture it with --capture-game-scene tutorial), --exit-at-story quits once the story resumes at event 10060)
 roses-bevy-scene --scene <captured-scene.json> --data-root <workspace> [--validate-only | --capture <new.png>] [--opening-manifest <manifest.json> [--start-stage intro|title|main-menu|historical-story|simon-arrival|name-entry|practice-choice|deck-choice|side-choice|<story or stand-in stage id>] [--replay cross,...] [--cloud-source <checkpoint.json> [--cloud-ticks 0..10000] [--freeze-clouds | --capture-live-ticks 1..1000]]]\nCapture renders 512x512 without a window. The intro movie plays in the window through the built-in PSS decoder (a legacy MP4 import uses Media Foundation; Start skips); title and main menu are overlay-only. --capture-live-ticks animates through the live upload path before capturing and prints a GPU/CPU cloud band check. Cloud source defaults the start to historical-story and resumes a private research checkpoint. --cloud-ticks advances from its first resumed frame; captures freeze that frame. Live clouds advance once per 25 Hz update (the original main loop spans two PAL fields; see UPDATE_HZ). The Simon camera is static; this preview has no audio. Enter advances; arrows navigate; X/A insert; Z deletes; Q/E change name page; S commits; Escape closes.
 Video recorder (a tool, docs/ADDITIONS.md): add --record <new.mp4> [--record-size 1920x1080] [--record-fps 60] [--record-seconds S] [--record-keys 120:down,2.5s:x*10] [--record-realtime] to --game or --scene. Headless; frames and the game's own sound go to an H.264/AAC MP4 (Media Foundation); no sound device is opened. ROSES_RECORD_WAV=<file> also writes the sound as WAV."
                 );

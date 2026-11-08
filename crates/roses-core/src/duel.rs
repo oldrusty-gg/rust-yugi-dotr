@@ -312,6 +312,39 @@ pub struct TempUnit {
     #[serde(flatten)]
     pub cell: GridPos,
     pub card: u16,
+    /// +0x44: the group the record belongs to (the summoning side; the
+    /// lifted unit's own group for slot 0's copy). 0x1E1EF0 tests option
+    /// 0x1C's bit and 0x2154C0 reads the block of this side.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub side: u8,
+    /// +0x48: 0x2703B0(side, card) for a record 0x1D9C70 / 0x1D9F50
+    /// creates, the lifted unit's own +0x48 for slot 0's copy (0x1E1BD0
+    /// reads it for "side 2's leader" level).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub discount: u8,
+    /// +0x08..+0x2F when they differ from the card table's (a lifted unit
+    /// whose record effects rewrote, or category-1 writes of the chain,
+    /// 0x249F3C): the words 0x1E1EF0 reads as the ability halfwords.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entries: Option<[Option<[u32; 2]>; 5]>,
+}
+
+fn is_zero(v: &u8) -> bool {
+    *v == 0
+}
+
+impl TempUnit {
+    /// A record 0x1D9C70 creates: the card's own entries, +0x48 =
+    /// `discount`.
+    pub fn new(cell: GridPos, card: u16, side: u8, discount: u8) -> Self {
+        Self {
+            cell,
+            card,
+            side,
+            discount,
+            entries: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -449,6 +482,17 @@ pub struct Duel {
     /// ([`Duel::set_leader_ranks`]).
     #[serde(default = "two_ranks")]
     pub leader_ranks: Vec<u8>,
+    /// 0x2154C0(side, card) for the sides whose saved card block the
+    /// duel's creator supplied ([`Duel::set_card_ranks`]): the non-zero
+    /// stored ranks by card id (absent = 0). A side without a table uses
+    /// [`Duel::stored_rank`]'s stand-in.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub card_ranks: Vec<Option<BTreeMap<u16, u16>>>,
+    /// 0x1A8C50(0x1C) (param 0x1C, the leader-ability switch, bit = side)
+    /// when the creator set it (Custom Duel); `None` = 3, as in every
+    /// campaign duel and recorded state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ability_option: Option<u32>,
     /// Unit records rewritten by duel effects (kind, attribute, effect
     /// entries), keyed by unit id; see [`Duel::unit_card`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1221,6 +1265,8 @@ impl Duel {
             rng: 0,
             destiny_rows: None,
             leader_ranks: vec![0; n],
+            card_ranks: Vec::new(),
+            ability_option: None,
             records: BTreeMap::new(),
             chain_bound: BTreeMap::new(),
             deck_stranded: vec![Vec::new(); n],
@@ -1283,6 +1329,8 @@ impl Duel {
             rng: 0,
             destiny_rows: None,
             leader_ranks: two_ranks(),
+            card_ranks: Vec::new(),
+            ability_option: None,
             records: BTreeMap::new(),
             chain_bound: BTreeMap::new(),
             deck_stranded: two_stranded(),
@@ -1698,12 +1746,13 @@ impl Duel {
         // (re)created at the side's cursor, which is on `cell`: slot 0 as
         // card 999, slot i + 1 as hand card i, the rest as 999 fillers.
         let hand = self.sides[usize::from(s)].hand.clone();
-        for (slot, t) in self.temp_units[..6].iter_mut().enumerate() {
+        for slot in 0usize..6 {
             let card = slot
                 .checked_sub(1)
                 .and_then(|i| hand.get(i).copied())
                 .unwrap_or(999);
-            *t = Some(TempUnit { cell, card });
+            let discount = self.summon_discount(s, card, cards);
+            self.temp_units[slot] = Some(TempUnit::new(cell, card, s, discount));
         }
         self.pending_summon = Some(cell);
         Ok(())
@@ -1849,7 +1898,14 @@ impl Duel {
         let mut elem_slot = if let ChainItem::Field(f) = &element {
             // State 0x44 (0x1D9540) copies the lifted unit's record into
             // slot 0 (its cell is the summon cell).
-            self.temp_units[0] = Some(TempUnit { cell, card: f.card });
+            // A byte copy: the unit's group (+0x44), +0x48 and its record
+            // words (+0x08..+0x2F, as effects rewrote them).
+            let words = self.unit_card(f, cards).entries;
+            let own = cards.card(f.card).map(|c| c.entries);
+            self.temp_units[0] = Some(TempUnit {
+                entries: (own != Some(words)).then_some(words),
+                ..TempUnit::new(cell, f.card, f.side, f.discount)
+            });
             0
         } else {
             hand[0] + 1
@@ -1874,7 +1930,8 @@ impl Duel {
                     bonus = 0;
                     engraved = None;
                     self.temp_units[next_slot] = None;
-                    self.temp_units[elem_slot] = Some(TempUnit { cell, card: result });
+                    let discount = self.summon_discount(s, result, cards);
+                    self.temp_units[elem_slot] = Some(TempUnit::new(cell, result, s, discount));
                 }
                 ChainStep::Equip { value, special } => {
                     let (monster, power_up) = if survivor == element.card() {
@@ -1912,6 +1969,10 @@ impl Duel {
                             });
                             if let Some(e) = Self::engrave(base, v) {
                                 engraved = Some(e);
+                                // 0x249F3C writes the element's group-2 record.
+                                if let Some(t) = self.temp_units[elem_slot].as_mut() {
+                                    t.entries = Some(e);
+                                }
                             }
                             0
                         }
@@ -2979,15 +3040,16 @@ impl Duel {
         // place (Weevil's "X R1 X" on 817 and 757). A magic card is activated
         // by revealing it (R2) and confirming, after at most one step
         // (0x253D60, experiment E4); a power-up may be revealed (never
-        // activated). Revealing traps or rituals is not traced yet.
+        // activated). A trap too [F]: R2 in state 0x1D tests only the
+        // leader, the step count and +0x57 bit 4 (0x1D46E0, no class
+        // test), and 0x253D60 phase 0 (0x253DF0–0x253EBC) returns 0x100
+        // ("nothing") for every kind but 0 (monster: flip), 1 (magic) and 5
+        // (ritual), so a revealed trap commits face-up and acted (0x1D60D8)
+        // and stays a trap: 0x26C4B0 / 0x24CC30 search set traps of any
+        // face. A face-up trap acting again (only reachable when an effect
+        // revealed it in its controller's own turn: turn start 0x269A84
+        // marks committed face-up traps acted) is the same no-op.
         let unit_card = self.unit_card(&unit, cards).into_owned();
-        if unit.face_up && matches!(unit_card.class(), class::NEAR_TRAP | class::FAR_TRAP) {
-            // State 0x38 runs 0x253D60 for a face-up unit; for traps untraced.
-            return Err(unsupported(format!(
-                "acting with face-up trap card {}",
-                unit.card
-            )));
-        }
         let activates = !unit_card.is_monster() && face_up && !unit.face_up;
         // State 0x38 → 0x253D60 phase 0 needs only +0x57 bit 2 for kinds 1
         // and 5: a magic or ritual card already face-up (revealed by an
@@ -2995,12 +3057,6 @@ impl Duel {
         // same as one revealed now; R2 does nothing then (emu M1-M5).
         let fires = activates
             || (unit.face_up && matches!(unit_card.class(), class::MAGIC | class::RITUAL));
-        if !unit_card.is_monster() {
-            let kind = unit_card.class();
-            if face_up && !matches!(kind, class::MAGIC | class::POWER_UP | class::RITUAL) {
-                return Err(unsupported(format!("revealing set card {}", unit.card)));
-            }
-        }
         // Shoulder toggles only for non-leaders before stepping (0x1D46E0).
         if unit.slot == 0 && (face_up || defence.is_some()) {
             return Err(DuelError::Illegal("leaders cannot change position"));
@@ -3069,10 +3125,14 @@ impl Duel {
                 // A face-up magic card onto an enemy card: event 0x5F
                 // destroys the card, the magic advances and activates on the
                 // new cell (0x24CB1C → 0x253D60, bit 4 or bit 2; emu M6/M7).
-                // A revealed power-up onto an enemy card is not traced.
+                // A revealed power-up onto an enemy card is not traced. A
+                // revealed trap is a plain card attacker: 0x24CB1C calls
+                // 0x253D60 only for kinds 1 / 5 [F TRAPS-0x23-0x31 §4] and
+                // the card-onto-card branch of 0x248130 reads no face bit
+                // [H: the branch's face reads not listed in its notes].
                 Some(o)
                     if activates
-                        && unit_card.class() != class::MAGIC
+                        && unit_card.class() == class::POWER_UP
                         && !cards.card(o.card).expect("card").is_monster() =>
                 {
                     return Err(unsupported(
@@ -6608,13 +6668,24 @@ impl Duel {
         // (Binding Chain, white_rules.rs).
         self.chain_bind_turn_start(s, cards, events);
         // Phase 0x40: +0x49 or +0x4A keeps a unit from acting (0x269A60).
-        let chained: Vec<bool> = self
+        // 0x269A84–0x269AD4 (and 0x269B1C for the other group): slots 1..10
+        // whose card is a trap (0x1DF290(kind >> 5) = 2: classes 3 and 4)
+        // and committed face-up (+0x57 bit 4) are marked acted as well [F].
+        let held: Vec<bool> = self
             .units
             .iter()
-            .map(|u| self.is_chain_bound(u.id))
+            .map(|u| {
+                self.is_chain_bound(u.id)
+                    || (u.slot != 0
+                        && u.committed_face_up
+                        && matches!(
+                            self.unit_card(u, cards).class(),
+                            class::NEAR_TRAP | class::FAR_TRAP
+                        ))
+            })
             .collect();
-        for (u, chained) in self.units.iter_mut().zip(chained) {
-            u.acted = u.side != s || u.spellbind > 0 || chained;
+        for (u, held) in self.units.iter_mut().zip(held) {
+            u.acted = u.side != s || u.spellbind > 0 || held;
         }
         // A scripted side gets the Exodia event only, no win (turn-verified.md §7 D).
         if self.exodia_complete(s, cards) && !script::scripted(self.controllers[usize::from(s)]) {

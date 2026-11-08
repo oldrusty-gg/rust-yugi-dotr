@@ -267,6 +267,14 @@ impl PlayerDeck {
     }
 }
 
+/// The block's non-zero stored ranks (0x2154C0 for ids 0..0x2AB), for
+/// [`crate::duel_play::FirstDuel::card_ranks`].
+pub fn block_ranks(block: &CardBlock) -> Vec<(u16, u16)> {
+    (0..roses_core::duel::RANKED_CARDS)
+        .filter_map(|c| block.stored_rank(c).filter(|&r| r != 0).map(|r| (c, r)))
+        .collect()
+}
+
 /// First static deck record of the campaign opponents: the hover panel
 /// loads record 0x1A + C4 (C4 = speaker − 197) into side 1 (0x235824).
 pub const OPPONENT_DECK_RECORD_BASE: usize = 0x1A;
@@ -618,6 +626,7 @@ mod tests {
             player_side: 0,
             custom_rules: None,
             options: None,
+            card_ranks: Default::default(),
         };
         let cards: &[u8] = &[];
         // The White Rose identities are swapped (p3 = 1000 + C4, p4 =
@@ -662,6 +671,7 @@ mod tests {
             player_side: 0,
             custom_rules: None,
             options: None,
+            card_ranks: Default::default(),
         };
         let side = |control| DuelSide { control, lp: 4000, sp: 3 };
         let mut start = DuelStart {
@@ -771,6 +781,80 @@ mod tests {
                     eprintln!("opponent {opponent} seed {seed} update {}: activation of card {}", play.frames, play.activation.as_ref().unwrap().card);
                 }
                 was = now;
+                if play.session.duel.outcome.is_some() && play.intro.is_none() && play.activation.is_none() && play.monster_fx.is_none() {
+                    break;
+                }
+            }
+            eprintln!("opponent {opponent} seed {seed} after {} updates (round {}): {}", play.frames, play.session.duel.round, play.title());
+        }
+    }
+
+    /// Research run (report "frozen screen", 8 Nov 2026): a human side
+    /// pressing random pad buttons (one press every `ROSES_PRESS_EVERY`
+    /// updates, default 4) against a campaign opponent (`ROSES_OPPONENT`,
+    /// `ROSES_NODE`) over `ROSES_SEEDS` seeds, through the game's duel
+    /// presentation; reports a halted session (the screen the player sees
+    /// stays) and a duel whose state does not change for
+    /// `ROSES_STALL` updates (default 20,000).
+    #[test]
+    #[ignore = "research run; requires ROSES_GAME_IMPORT"]
+    fn print_random_pad_duels() {
+        let path = std::env::var_os("ROSES_GAME_IMPORT").expect("ROSES_GAME_IMPORT");
+        let env = |k: &str, d: u64| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+        let (opponent, node, seeds) = (env("ROSES_OPPONENT", 2) as u8, env("ROSES_NODE", 3) as u8, env("ROSES_SEEDS", 5));
+        let every = env("ROSES_PRESS_EVERY", 4).max(1);
+        let stall = env("ROSES_STALL", 20_000);
+        let game = GameImport::open(Path::new(&path)).unwrap();
+        let data = crate::duel_play::load(&game.duel).unwrap();
+        let decks = roses_assets::parse_pal_decks(&data.executable).unwrap().decks;
+        let maps = roses_assets::parse_pal_rules(&data.executable).unwrap().maps;
+        let request = DuelRequest { node, opponent, params: [i32::from(opponent), 0, 1100, 1000 + i32::from(opponent)] };
+        let side = &data.first_duel.sides[0];
+        let player = PlayerDeck {
+            deck_record: side.deck_record,
+            leader: side.leader,
+            cards: side.cards.clone(),
+            leader_rank: decks.get(side.deck_record).map_or(1, |d| i32::from(d.leader_rank_raw)),
+        };
+        let built = duel_for_request(&request, &data.first_duel, &player, &decks, &maps, &data.executable).unwrap();
+        // Start is rare so a turn gets explored before it ends.
+        let buttons: Vec<u16> = crate::duel_play::BUTTONS
+            .iter()
+            .flat_map(|&(name, bits)| std::iter::repeat_n(bits, match name { "select" => 0, "start" | "triangle" | "l1" | "r1" | "l2" | "r2" => 1, "circle" | "square" => 2, "cross" => 10, _ => 4 }))
+            .collect();
+        for seed in 1..=seeds {
+            let mut d = crate::duel_play::load(&game.duel).unwrap();
+            d.first_duel = built.clone();
+            let mut play = crate::duel_play::DuelPlay::new(d, seed, false).unwrap();
+            let start = play.cursor();
+            let mut camera = crate::duel_board::BoardCamera::snapped((start.column, start.row));
+            let mut rng = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+            let mut last = (String::new(), 0u64);
+            let mut held = 0u16;
+            for _ in 0..env("ROSES_UPDATES", 60_000) {
+                if play.frames % every == 0 {
+                    rng ^= rng << 13;
+                    rng ^= rng >> 7;
+                    rng ^= rng << 17;
+                    held = buttons[(rng % buttons.len() as u64) as usize];
+                } else {
+                    held = if play.frames % every == 1 { held } else { 0 };
+                }
+                play.update(held);
+                if let Some(why) = &play.halted {
+                    eprintln!("opponent {opponent} seed {seed} HALTED at update {}: {why}", play.frames);
+                    break;
+                }
+                let cursor = play.cursor();
+                crate::duel_play::drive_camera(&mut camera, &mut play, cursor, &|_| None);
+                camera.tick();
+                let duel = &play.session.duel;
+                let key = format!("{:?} {:?} {} {:?} {:?}", duel.round, duel.active, duel.units.len(), duel.sides.iter().map(|s| (s.lp, s.hand.len())).collect::<Vec<_>>(), play.session.input.mode);
+                if key != last.0 {
+                    last = (key, play.frames);
+                } else if play.frames - last.1 == stall {
+                    eprintln!("opponent {opponent} seed {seed} STALL at update {} (no change since {}): {}", play.frames, last.1, play.title());
+                }
                 if play.session.duel.outcome.is_some() && play.intro.is_none() && play.activation.is_none() && play.monster_fx.is_none() {
                     break;
                 }
