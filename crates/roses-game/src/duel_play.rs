@@ -728,6 +728,11 @@ pub struct DuelPlay {
     /// Each board card's +0x55 (0 upright .. 0xFF sideways), stepped 0x20 per
     /// update toward its defence flag.
     sideways: BTreeMap<roses_core::UnitId, u8>,
+    /// +0x54 of the card a move selection holds (0 face down .. 0xFF face
+    /// up), stepped 0x20 per update toward the selection's face (R2 / L2)
+    /// and, once the selection ends, toward the card's face; kept only while
+    /// it differs from that face ([`DuelPlay::step_face_flips`]).
+    face_flips: BTreeMap<roses_core::UnitId, u8>,
     /// A monster flip effect being presented (`duel_monster_fx`), before
     /// the battle it interrupts.
     pub monster_fx: Option<Box<crate::duel_monster_fx::MonsterShow>>,
@@ -939,6 +944,17 @@ pub fn duel_music_track(param1: u8, param2: u32) -> u32 {
         }
         _ => 40,
     }
+}
+
+/// 0x1AB440 code 5: the battle track by scene param 5, which the arena's
+/// stage load (0x1D1110) sets to the battle cell's terrain (0x1E3530 ->
+/// 0x1A8C90(5, terrain), then 0x1AB440(5, 1) at 0x1D1164) [F jump table
+/// 0x2BDA50, DUEL-AUDIO-SCOPE.md 3.2; emu BATTLE-SCENE.md: 0x11 then 0xF].
+/// Indexed by terrain: FOREST 17, WASTELAND 18, MOUNTAIN 15, MEADOW 14,
+/// SEA 16, DARK 20, TOON 21, NORMAL 13, LABYRINTH 22, CRUSH 19.
+pub fn battle_music_track(terrain: u8) -> u32 {
+    const TRACKS: [u32; 10] = [0x11, 0x12, 0xF, 0xE, 0x10, 0x14, 0x15, 0xD, 0x16, 0x13];
+    TRACKS.get(usize::from(terrain)).copied().unwrap_or(0x11)
 }
 
 /// A [`HandFace`] card id for a hidden hand card: `HIDDEN_HAND + side`
@@ -1766,6 +1782,7 @@ impl DuelPlay {
             audio: Vec::new(),
             activation: None,
             sideways: BTreeMap::new(),
+            face_flips: BTreeMap::new(),
             monster_fx: None,
             deferred_battle: None,
             deferred_activation: None,
@@ -2723,6 +2740,18 @@ impl DuelPlay {
             return input;
         }
         let mut input = overlay_input(&self.session);
+        // The held card's face flip (R2 / L2 while choosing).
+        for (unit, u) in input.units.iter_mut().zip(&self.session.duel.units) {
+            match self.face_flips.get(&u.id).copied() {
+                Some(0) => unit.face_up = false,
+                Some(0xFF) => unit.face_up = true,
+                Some(p54) => {
+                    unit.face_up = true;
+                    unit.flip = Some(p54);
+                }
+                None => {}
+            }
+        }
         add_board_faces(&mut input, &self.session, &self.data.catalogue, &self.hud_context());
         let held = held_position(&self.session);
         for (unit, u) in input.units.iter_mut().zip(&self.session.duel.units) {
@@ -2978,6 +3007,43 @@ impl DuelPlay {
             && self.session.seats.get(usize::from(side & 1)).is_some_and(Option::is_none)
     }
 
+    /// The summon preview's warning (player request of 2026-11-08 for an
+    /// indicator of a full field; this is the original's own): from the pick
+    /// (state 0x45) the original checks every update whether the chain's
+    /// result finds its side's 5 monster (or 5 other) slots taken, the lifted
+    /// field unit not counted, and opens 0x1E5540(8, 0, -0xC8, 0x117
+    /// "Maximum number of monsters on Field" / 0x118 "... spells ..."), the
+    /// CAUTION window; Cross / Square or Circle in 0x46 close it (0x1D73CC /
+    /// 0x1D7434). A warning only: the summon still goes ahead and the result
+    /// goes to the graveyard (state 0x4D) [F 0x1D7134..0x1D71E8,
+    /// DUEL-MESSAGE-BOX.md 1.2, FUSION.md]. Online, not for a hidden hand
+    /// (its cards are not known here). Returns the message id.
+    pub fn summon_caution(&self) -> Option<u16> {
+        let Mode::Confirm(menu) = &self.session.input.mode else {
+            return None;
+        };
+        if self.unknown_hand() {
+            return None;
+        }
+        let picks = if menu.marks.is_empty() { vec![menu.cursor] } else { menu.marks.clone() };
+        let monster = self.session.duel.summon_field_full(&picks, &self.data.catalogue)?;
+        Some(if monster { 0x117 } else { 0x118 })
+    }
+
+    /// Online: the open details view's card is one this screen does not know
+    /// (the copy's placeholder): a field unit the latest view hides, or a
+    /// card of the other seat's hidden hand. A graveyard card is always
+    /// known. Never offline.
+    pub fn details_unknown(&self, view: &roses_core::duel::ui::DetailsView) -> bool {
+        if self.online.is_none() {
+            return false;
+        }
+        match view.unit {
+            Some(id) => self.card_unknown(id),
+            None => !matches!(self.session.input.mode, Mode::Graveyard(_)) && self.unknown_hand(),
+        }
+    }
+
     /// What the open details view shows (overlay slot 1, code 0x11).
     pub fn details_of(&self, view: roses_core::duel::ui::DetailsView) -> DetailsShown {
         let input = &self.session.input;
@@ -3167,6 +3233,58 @@ impl DuelPlay {
         let ctx = self.hud_context();
         let q = Query::new(duel, &self.data.catalogue, &ctx);
         q.hidden(Record::Hand { side, slot: 1, card }, side).then_some(side)
+    }
+
+    /// The held card's face flip (+0x54, [`DuelPlay::face_flips`]): in the
+    /// move state R2 / L2 write +0x57 bit2 at once and start the turn over
+    /// (+0x56 bits 4-5 = 1 / 3, 0x1D46E0), Circle turns it back (state 0x1F)
+    /// and the commit waits for it (state 0x1E) [V movement-verified.md 4,
+    /// 5]; the card turns about its long axis, 0x20 per update to 0xFF [F
+    /// FLIP-AND-VICTIMS.md 1]. The engine applies the face only at the
+    /// confirming Cross, so before this the board showed nothing until the
+    /// move was made. Online, the other seat's face-down card is not known
+    /// here: it turns only once the server's revision reveals it.
+    fn step_face_flips(&mut self) {
+        let held = match &self.session.input.mode {
+            Mode::Move(sel) => Some((sel.unit, sel.face_up)),
+            _ => None,
+        };
+        let mut flips = std::mem::take(&mut self.face_flips);
+        for u in self.session.duel.units.iter().filter(|u| u.slot != 0) {
+            let shown = u.committed_face_up || u.face_up;
+            let holding = held.filter(|h| h.0 == u.id);
+            let target_up = match holding {
+                Some((id, up)) if !self.card_unknown(id) => up || shown,
+                _ => shown,
+            };
+            let target = if target_up { 0xFFu8 } else { 0 };
+            let p = match (flips.get_mut(&u.id), holding) {
+                (Some(p), _) => p,
+                (None, Some(_)) => flips.entry(u.id).or_insert(if shown { 0xFF } else { 0 }),
+                (None, None) => continue,
+            };
+            *p = match target.cmp(p) {
+                std::cmp::Ordering::Greater => p.saturating_add(0x20),
+                std::cmp::Ordering::Less => p.saturating_sub(0x20),
+                std::cmp::Ordering::Equal => *p,
+            };
+            if holding.is_none() && *p == target {
+                flips.remove(&u.id);
+            }
+        }
+        let units = &self.session.duel.units;
+        flips.retain(|id, _| units.iter().any(|u| u.id == *id));
+        self.face_flips = flips;
+    }
+
+    /// Online: this screen does not know the card of field unit `unit` yet
+    /// (`OnlineLink::card_unknown`: the other seat's face-down card), so the
+    /// copy holds the placeholder (`roses_net::hidden_card`) for it. Never
+    /// offline.
+    pub fn card_unknown(&self, unit: roses_core::UnitId) -> bool {
+        self.online
+            .as_ref()
+            .is_some_and(|l| self.session.duel.unit(unit).is_none_or(|u| l.card_unknown(u)))
     }
 
     pub fn unknown_hand(&self) -> bool {
@@ -4598,6 +4716,7 @@ impl DuelPlay {
                 std::cmp::Ordering::Equal => *p,
             };
         }
+        self.step_face_flips();
         self.last_script = None;
         // A private test, not gameplay: `ROSES_EXODIA_TEST=<side>` gives
         // that side a complete Exodia on the first other side's turn (when
@@ -4764,6 +4883,16 @@ impl DuelPlay {
                     // passes and the number) follows the orbit.
                     let arena_start = launch + fly + VERSUS_REST_HOLD;
                     let arena_start = if intro.leader { launch + fly } else { arena_start };
+                    // The arena's stage load switches to the battle cell's
+                    // terrain track (0x1AB440(5, 1), mode 1 keeps a track
+                    // already playing) [F 0x1D1144..0x1D1168]; before this
+                    // every battle kept track 17 (Forest's) whatever the cell.
+                    if !intro.leader && t == arena_start && self.session.tutorial.is_none() {
+                        self.audio.push(crate::duel_audio::AudioCue::Music {
+                            track: battle_music_track(intro.arena_terrain),
+                            keep: true,
+                        });
+                    }
                     if arena_available && !intro.leader && t == arena_start {
                         if let Some(v) = &mut intro.versus {
                             v.arena = Some(crate::duel_versus::ArenaShot {
@@ -5158,7 +5287,13 @@ impl DuelPlay {
             _ => {}
         }
         if let Some(view) = self.session.input.details {
-            self.details_shown = Some(self.details_of(view));
+            // Online, the other seat's details view of a card this screen
+            // does not know (its hand under HIDE, its own face-down card):
+            // the pane would show the placeholder, so it is not drawn; the
+            // original never opens the details of a hidden card (Triangle on
+            // one is refused). Its slide still times the other seat's
+            // presses.
+            self.details_shown = (!self.details_unknown(&view)).then(|| self.details_of(view));
         }
         let Before {
             mode: mode_before,
@@ -6203,7 +6338,12 @@ impl DuelHud {
                 Some(0x219) => Some(0x10D),
                 _ => None,
             };
-            ui.message_box = text.map(|text| roses_client::duel_hud::MessageBox { x: 0, y: -0xA0, text });
+            ui.message_box = text.map(|text| roses_client::duel_hud::MessageBox { x: 0, y: -0xA0, text, caution: false });
+        }
+        // The summon preview's CAUTION box, from the pick (0x45) until a
+        // face button in 0x46 (`DuelPlay::summon_caution`).
+        if let Some(text) = play.summon_caution() {
+            ui.message_box = Some(roses_client::duel_hud::MessageBox { x: 0, y: -0xC8, text, caution: true });
         }
         if let Some((d45, d47, poses)) = &view {
             let count = duel.sides[usize::from(duel.active & 1)].hand.len();
@@ -6231,7 +6371,7 @@ impl DuelHud {
             .or_else(|| play.destiny_event.map(|_| roses_core::duel::DESTINY_MESSAGE_BOX))
         {
             // 0x1E5540(0, 0, 0x50, text) [F ACTIVATION-PRESENTATION.md 3].
-            ui.message_box = Some(roses_client::duel_hud::MessageBox { x: 0, y: 0x50, text });
+            ui.message_box = Some(roses_client::duel_hud::MessageBox { x: 0, y: 0x50, text, caution: false });
         }
         if self.hidden || play.scene_hides_hud() {
             ui.d67 &= !1;
@@ -6302,6 +6442,7 @@ impl DuelHud {
             notes.append(&mut state.notes);
             state.notes = notes;
         }
+        state.hand_box_hidden = play.unknown_hand();
         if let Some(flight) = &play.summon_flight {
             // The summoned unit is placed by the 0x4F commit; until then its
             // cell is empty for the card boxes (info frames empty) [emu].
@@ -6353,17 +6494,15 @@ impl DuelHud {
         // 0x1CE970 → 0x1AFAC0 draws the hand records' card objects while the
         // hand overlay (0x1AFF00) shows them.
         self.hand.clear();
-        // Online, the other seat's hidden hand: only placeholders are known
-        // here, so its cards show their back (never a stand-in face).
-        // Offline, a hand the viewer may not see (a computer's, facing a
-        // pad: `DuelPlay::hand_hidden`) is composed as the side's hidden
-        // card (`card_face::hidden_sprites`) [F 0x1DBA80, 0x1DA6A0].
-        let unknown_hand = play.unknown_hand();
+        // A hand the viewer may not see is composed as the side's hidden
+        // card (`card_face::hidden_sprites`) [F 0x1DBA80, 0x1DA6A0]:
+        // offline a computer's, facing a pad (`DuelPlay::hand_hidden`);
+        // online the other seat's under Card Display HIDE, the original's
+        // 2-player rule (only placeholders are known here, never a face).
+        let unknown_hand = play.unknown_hand().then_some(play.session.duel.active & 1);
         let hidden_hand = play.hand_hidden();
         let shown = |face: HandFace| {
-            if unknown_hand {
-                HandFace { card: card_face::BACK_CARD, level: 0, attack: 0, defence: 0 }
-            } else if let Some(side) = hidden_hand {
+            if let Some(side) = unknown_hand.or(hidden_hand) {
                 HandFace { card: HIDDEN_HAND + u16::from(side), level: 0, attack: 0, defence: 0 }
             } else {
                 face
@@ -6814,6 +6953,85 @@ mod tests {
         hash.update(serde_json::to_vec(&play.session.duel).unwrap());
         hash.update(format!("{n} {:?} {}", play.halted, play.frames).as_bytes());
         hash.finalize().iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// Player report of 2026-11-08: "Wasteland for some reason plays forest
+    /// terrain theme". A monster battle's arena switches to its cell's
+    /// terrain track (0x1AB440 code 5: Wasteland 18, Normal 13), after the
+    /// battle-start track 17 (Forest's, param 5 = 0); the port used to keep
+    /// 17 for every battle. A computer duel on an all-Wasteland board and
+    /// one on an all-Normal board.
+    #[test]
+    fn a_battle_plays_its_cells_terrain_track() {
+        use crate::duel_audio::AudioCue;
+        use roses_core::duel::terrain;
+        assert_eq!((0..10).map(battle_music_track).collect::<Vec<_>>(), [17, 18, 15, 14, 16, 20, 21, 13, 22, 19]);
+        for (ground, track) in [(terrain::WASTELAND, 18), (terrain::NORMAL, 13)] {
+            let cards = roses_net::synthetic::catalogue();
+            let setup = roses_server::MatchSetup {
+                seed: 3,
+                terrain: vec![ground; 49],
+                leaders: roses_net::synthetic::leaders(),
+                deck_sources: roses_net::synthetic::decks(),
+                first: 0,
+                leader_abilities: [vec![], vec![]],
+                custom_rules: None,
+                leader_ranks: [0; 2],
+                destiny_rows: None,
+            };
+            let duel = setup.build(&cards).unwrap();
+            let executable = vec![0u8; 0x1C_4D80 + 854 * 20 + 0x2000];
+            let tables = roses_core::duel::ai::weevil::Tables::new(&cards.fusions, &executable).unwrap();
+            let side = |leader| SideDeck { deck_record: 0, leader, cards: Vec::new() };
+            let data = DuelData {
+                catalogue: cards,
+                names: Vec::new(),
+                first_duel: FirstDuel {
+                    board_map: 0,
+                    terrain: duel.terrain.clone(),
+                    first: duel.first,
+                    sides: [side(0), side(1)],
+                    computer_sides: vec![0, 1],
+                    planner_tier: 0,
+                    leader_abilities: [vec![], vec![]],
+                    opponent: 1,
+                    leader_ranks: [0; 2],
+                    player_side: 0,
+                    custom_rules: None,
+                    options: None,
+                    card_ranks: Default::default(),
+                },
+                tables,
+                executable,
+                messages: Vec::new(),
+                texsys: Vec::new(),
+                picmini: Vec::new(),
+                texeff: None,
+                pictures: None,
+            };
+            let seats = [
+                Some(roses_core::duel::session::ComputerSeat::new(&duel, 0, 0)),
+                Some(roses_core::duel::session::ComputerSeat::new(&duel, 1, 0)),
+            ];
+            let mut play = DuelPlay::with_session(data, DuelSession::new(duel, seats), 3).unwrap();
+            let mut music = Vec::new();
+            for _ in 0..30_000 {
+                if play.session.duel.outcome.is_some() || play.halted.is_some() {
+                    break;
+                }
+                play.update_pads([0, 0]);
+                music.extend(play.audio.drain(..).filter_map(|c| match c {
+                    AudioCue::Music { track, keep } => Some((track, keep)),
+                    _ => None,
+                }));
+            }
+            let battles = music.iter().filter(|m| **m == (17, false)).count();
+            let arenas = music.iter().filter(|m| **m == (track, true)).count();
+            eprintln!("terrain {ground}: {battles} battle starts, {arenas} arena tracks; {music:?}");
+            assert!(arenas > 0, "terrain {ground}: {music:?}");
+            assert!(arenas <= battles);
+            assert!(!music.contains(&(17, true)), "terrain {ground}: {music:?}");
+        }
     }
 
     /// The game's 1v1 offline duel is the same with and without the

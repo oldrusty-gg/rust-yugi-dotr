@@ -679,6 +679,7 @@ pub fn from_duel<C: CardData + ?Sized>(
         #[cfg(feature = "online")]
         notes: Vec::new(),
         hand_box_values: [left, right],
+        hand_box_hidden: false,
         overlay_mode: ui.extra.overlay_mode,
         hand_overlay,
         message_box: ui.message_box,

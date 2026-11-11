@@ -70,6 +70,8 @@ const WINDOW_TITLES: u32 = 0x29_03B0;
 const GRAVEYARD_CODE: u32 = 0x0E;
 /// The OPTION panel's title (slot 0 code 7, "OPTION").
 const OPTION_CODE: u32 = 7;
+/// The message box kind 8's title (slot-3 state 0x10, "CAUTION").
+const CAUTION_CODE: u32 = 0x10;
 
 /// Names start at message 323 (0x1DF480); 854 cards have names.
 const CARD_NAME_MESSAGE: u16 = 323;
@@ -137,6 +139,8 @@ pub struct HudTables {
     /// The GRAVEYARD panel's title (NUL-terminated string at
     /// [0x2903B0 + 4·0x0E], drawn in the gold font).
     pub graveyard_title: Vec<u8>,
+    /// The message box kind 8's title ([0x2903B0 + 4·0x10], "CAUTION").
+    pub caution_title: Vec<u8>,
     /// Expanded message codes by message id (MSG_E.DAT).
     messages: BTreeMap<u16, Vec<u16>>,
 }
@@ -239,6 +243,10 @@ impl HudTables {
             },
             option_title: {
                 let p = table(WINDOW_TITLES + 4 * OPTION_CODE, 4)?;
+                elf_string(executable, u32::from_le_bytes(p.try_into().unwrap()))?
+            },
+            caution_title: {
+                let p = table(WINDOW_TITLES + 4 * CAUTION_CODE, 4)?;
                 elf_string(executable, u32::from_le_bytes(p.try_into().unwrap()))?
             },
             messages,
@@ -477,6 +485,11 @@ pub struct HudState {
     /// Left and right hand-box values: 0x1E1B70(2, d4f + 1, 0), and for the
     /// right box 0x270280() instead when [0x2DB8EE] != 0.
     pub hand_box_values: [i32; 2],
+    /// Online (a port addition): the hand shown is the other seat's hidden
+    /// hand, whose cards this screen does not know, so the hand boxes show
+    /// the "?" the original shows for a hidden hand (message 29) instead of
+    /// a value read from placeholders. Always false offline.
+    pub hand_box_hidden: bool,
     /// 0x1AB8B0(1) (the overlay needs 1).
     pub overlay_mode: i8,
     /// Hand cards of side d54 (count = its hand count).
@@ -545,11 +558,14 @@ pub struct GraveyardEntry {
 
 /// 0x1E5540(0, x, y, text): a plain box anchored at centre x 256 + x, top
 /// 256 + y, sized to MSG_E message `text` (DUEL-MESSAGE-BOX.md) [F, emu].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// `caution`: kind 8 (slot-3 state 0x10, drawer 0x1B12D4), the same box
+/// with the "CAUTION" title plate above the text.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MessageBox {
     pub x: i16,
     pub y: i16,
     pub text: u16,
+    pub caution: bool,
 }
 
 impl Default for HudState {
@@ -594,6 +610,7 @@ impl Default for HudState {
             #[cfg(feature = "online")]
             notes: Vec::new(),
             hand_box_values: [0; 2],
+            hand_box_hidden: false,
             overlay_mode: 0,
             hand_overlay: Vec::new(),
             message_box: None,
@@ -1548,6 +1565,18 @@ impl Builder<'_> {
         // 0x1B1830: text wider than 456 px is squeezed into a 480 box.
         let (s, bw) = if w >= 457 { (456.0 / w as f32, 480) } else { (1.0, w + 24) };
         let (cx, top) = (256 + i32::from(m.x), 256 + i32::from(m.y));
+        if m.caution {
+            // Kind 8 (0x1B12D4): the title plate (panel type 11, colour set
+            // 2, gold font size 2) at top + 0xC, the text below it; inner
+            // height = plate + 0x18 + H + 0x0C [F; emu 197-n65: box
+            // (66..438) x (56..172), text at (82, 116) for 0x117 at y -0xC8].
+            let title = self.t.caution_title.clone();
+            let plate_h = self.gold_measure(2, 3, &title).1 + 0xC;
+            self.titled_box(2, &title, cx, top, bw, plate_h + 0x18 + h + 0xC);
+            self.text_line_h(1, i32::from(m.text), cx - (w as f32 * s / 2.0) as i32, top + plate_h + 0x18, w, s, lines as i32);
+            self.z = HUD_Z;
+            return;
+        }
         self.panel(13, -1, 1, cx - bw / 2 - 4, top, -bw, -(h + 24), true);
         self.text_line_h(1, i32::from(m.text), cx - (w as f32 * s / 2.0) as i32, top + 16, w, s, lines as i32);
         self.z = HUD_Z;
@@ -2271,7 +2300,7 @@ impl Builder<'_> {
     fn hand_box(&mut self, x: i32, y: i32, right: bool) {
         let st = self.st;
         let d3c = usize::from(st.d3c & 1);
-        let question = st.sides[d3c].controller < 32 && st.sides[d3c ^ 1].controller >= 100;
+        let question = (st.sides[d3c].controller < 32 && st.sides[d3c ^ 1].controller >= 100) || st.hand_box_hidden;
         if st.d54 > 1 {
             self.unsupported(UnsupportedKind::TurnSide(st.d54));
             return;
@@ -3710,6 +3739,7 @@ mod tests {
             dimx: 0,
             graveyard_title: b"TITLE".to_vec(),
             option_title: b"OPTION".to_vec(),
+            caution_title: b"CAUTION".to_vec(),
             messages,
         }
     }
@@ -3811,6 +3841,74 @@ mod tests {
         st.sides[0].cursor = [3, 6];
         st.sides[1].controller = 100;
         st
+    }
+
+    /// The summon preview's CAUTION window (0x1E5540 kind 8 at y -0xC8,
+    /// message 0x117): the plain box's frame with the title plate above the
+    /// text, which moves down by the plate; the same text and x.
+    #[test]
+    fn the_caution_box_puts_its_title_above_the_text() {
+        let t = tables();
+        assert!(HudTables::required_messages().contains(&0x117) && HudTables::required_messages().contains(&0x118));
+        let draw = |caution: bool| {
+            let st = HudState { message_box: Some(MessageBox { x: 0, y: -0xC8, text: 0x117, caution }), ..HudState::default() };
+            let f = frame(&st, &t);
+            assert!(f.unsupported.is_empty(), "{:?}", f.unsupported);
+            f.prims.into_iter().filter(|p| p.element == Element::MessageBox).collect::<Vec<_>>()
+        };
+        let text = |prims: &[Primitive]| {
+            prims
+                .iter()
+                .find_map(|p| match p.texture {
+                    TextureSource::TextCanvas { message: Some(0x117), .. } => Some((p.verts[0].x as i32, p.verts[0].y as i32)),
+                    _ => None,
+                })
+                .expect("the message")
+        };
+        let (plain, caution) = (draw(false), draw(true));
+        assert_eq!(text(&plain), (256 - 18, 256 - 0xC8 + 16));
+        let plate_h = {
+            let b = Builder { t: &t, st: &HudState::default(), prims: Vec::new(), unsupported: Vec::new(), element: Element::MessageBox, z: HUD_Z, gradient_blend: None, gold_rgba: GREY };
+            b.gold_measure(2, 3, b"CAUTION").1 + 0xC
+        };
+        assert_eq!(text(&caution), (256 - 18, 256 - 0xC8 + plate_h + 0x18));
+        assert!(caution.len() > plain.len());
+    }
+
+    /// Online, the other seat's hidden hand (`hand_box_hidden`): both hand
+    /// boxes draw the "?" whatever values the placeholders gave (the 8 Nov
+    /// build showed Blue-Eyes's cost 8 for every card).
+    #[test]
+    fn a_hidden_hand_shows_question_marks_in_the_hand_boxes() {
+        let t = tables();
+        let state = |values: [i32; 2], hidden: bool| {
+            let mut st = shown();
+            // Two pads (an online 2-seat duel), side 0 acting.
+            st.sides[0].controller = 100;
+            st.sides[1].controller = 101;
+            (st.d45, st.d48) = (128, 128);
+            st.hand_box_values = values;
+            st.hand_box_hidden = hidden;
+            st
+        };
+        let boxes = |st: &HudState| -> Vec<Primitive> {
+            frame(st, &t)
+                .prims
+                .into_iter()
+                .filter(|p| matches!(p.element, Element::HandBoxLeft | Element::HandBoxRight))
+                .collect()
+        };
+        assert!(!boxes(&state([8, 8], false)).is_empty());
+        assert_ne!(boxes(&state([3, 3], false)), boxes(&state([8, 8], false)), "the values are drawn");
+        let hidden = boxes(&state([8, 8], true));
+        assert_ne!(hidden, boxes(&state([8, 8], false)));
+        assert_eq!(hidden, boxes(&state([3, 3], true)), "no value is drawn");
+        // The same boxes as the original's hidden hand (a computer viewer
+        // against a pad side, message 29).
+        let mut computer = state([8, 8], false);
+        computer.sides[0].controller = 0;
+        computer.sides[1].controller = 100;
+        assert_eq!(hidden, boxes(&computer));
     }
 
     #[test]

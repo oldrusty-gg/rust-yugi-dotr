@@ -528,6 +528,20 @@ impl OnlineLink {
         }
     }
 
+    /// The presented copy does not know the card of field unit `unit`: the
+    /// latest view sends none for it (the other seat's face-down card), or
+    /// the copy still holds the placeholder ([`hidden_card`]) of a face-down
+    /// card a newer revision reveals that is not presented yet.
+    pub fn card_unknown(&self, unit: &roses_core::duel::DuelUnit) -> bool {
+        let unsent = self
+            .state
+            .view
+            .as_ref()
+            .and_then(|v| v.board.units.iter().find(|u| u.id == unit.id))
+            .is_none_or(|u| u.card.is_none());
+        unsent || (unit.card == self.hidden && !unit.face_up && !unit.committed_face_up)
+    }
+
     /// The match's Custom Duel switches as this screen presents them (the
     /// server's; a spectator knows no hidden card of either side, so both
     /// are presented as HIDE).
@@ -1025,6 +1039,59 @@ pub(crate) mod tests {
         }
     }
 
+    /// R2 once in each move selection of an own face-down monster, before
+    /// its first step, and once a round in the hand menu the details view
+    /// (Triangle, Right to the next card, Circle); the bot plays on.
+    #[derive(Default)]
+    struct FlipTour {
+        done: std::collections::BTreeSet<(roses_core::UnitId, u16)>,
+        hand_rounds: std::collections::BTreeSet<u16>,
+        hand_step: u8,
+        open: u32,
+        right: bool,
+    }
+
+    impl FlipTour {
+        fn key(&mut self, play: &DuelPlay, seat: u8, can: bool) -> Option<u16> {
+            use roses_core::duel::ai::pad;
+            let duel = &play.session.duel;
+            let input = &play.session.input;
+            let round = u16::from(duel.round);
+            match self.hand_step {
+                0 if can && duel.active == seat && matches!(input.mode, Mode::Hand(_)) && input.details.is_none() && self.hand_rounds.insert(round) => {
+                    self.hand_step = 1;
+                    self.open = 0;
+                    self.right = false;
+                    return Some(pad::TRIANGLE);
+                }
+                1 if input.details.is_some() => {
+                    self.open += 1;
+                    return Some(if self.open >= 12 && can && !self.right {
+                        self.right = true;
+                        pad::RIGHT
+                    } else if self.open >= 24 && can && self.right {
+                        self.hand_step = 2;
+                        pad::CIRCLE
+                    } else {
+                        0
+                    });
+                }
+                1 => self.hand_step = 0,
+                2 if input.details.is_some() && can && play.details_slide >= 64 => return Some(pad::CIRCLE),
+                2 if input.details.is_some() || play.details_slide > 0 => return Some(0),
+                2 => self.hand_step = 0,
+                _ => {}
+            }
+            let Mode::Move(sel) = &input.mode else {
+                return None;
+            };
+            let unit = duel.unit(sel.unit)?;
+            let fresh = can && duel.active == seat && sel.path.is_empty() && !sel.face_up;
+            let monster = (1..=5).contains(&unit.slot) && !unit.face_up && !unit.committed_face_up;
+            (fresh && monster && self.done.insert((unit.id, u16::from(duel.round)))).then_some(roses_core::duel::ai::pad::R2)
+        }
+    }
+
     /// A DuelData around a catalogue without the disc files (the online
     /// client needs no planner tables and these tests draw no HUD).
     pub(crate) fn bare_data(cards: Catalogue, terrain: Vec<u8>) -> DuelData {
@@ -1073,6 +1140,7 @@ pub(crate) mod tests {
         tables: RulesTables,
         hud: HudFactory,
         max_updates: u64,
+        flip: bool,
     ) -> ClientRun {
         let connector: Connector = Box::new(move || {
             let (client, server) = memory_pair::<ClientMessage, ServerMessage>();
@@ -1092,6 +1160,7 @@ pub(crate) mod tests {
         let (mut presses, mut animated, mut refused) = (0, 0, 0);
         let (mut remote_hand_rows, mut remote_flights) = (0, 0);
         let mut tour = DetailsTour::default();
+        let mut flips = flip.then(FlipTour::default);
         let (mut local_slides, mut remote_slides) = (vec![0u8], vec![0u8]);
         let mut rest = [0u64; 2];
         let mut last_status = None;
@@ -1103,7 +1172,9 @@ pub(crate) mod tests {
             let can = !play.animating() && link.may_act();
             let view = link.state.view.clone().expect("a view");
             let revision = link.state.revision;
-            let key = match tour.key(&play, seat, can) {
+            // The flip tour first: the details tour, once done, holds every
+            // later details view open (its last step).
+            let key = match flips.as_mut().and_then(|f| f.key(&play, seat, can)).or_else(|| tour.key(&play, seat, can)) {
                 Some(k) => k,
                 None => bot.key(&play.session.duel, &play.session.input, &view, revision, can, &cards),
             };
@@ -1185,6 +1256,20 @@ pub(crate) mod tests {
         data: impl Fn() -> DuelData + Sync,
         hud: HudFactory,
     ) -> (OnlineMatch, [ClientRun; 2]) {
+        online_match_with(cards, setup, decks, (tables, options), data, hud, false)
+    }
+
+    /// [`online_match`]; `flip`: each seat also turns its face-down
+    /// monsters face up with R2 in the move state ([`FlipTour`]).
+    fn online_match_with(
+        cards: Catalogue,
+        setup: MatchSetup,
+        decks: [DeckSubmission; 2],
+        (tables, options): (RulesTables, MatchOptions),
+        data: impl Fn() -> DuelData + Sync,
+        hud: HudFactory,
+        flip: bool,
+    ) -> (OnlineMatch, [ClientRun; 2]) {
         let mut game = OnlineMatch::with_submitted_decks(
             "bevy-online-test",
             setup,
@@ -1209,7 +1294,7 @@ pub(crate) mod tests {
                 let tx = tx.clone();
                 let deck = decks[usize::from(seat)].clone();
                 let tables = tables.clone();
-                scope.spawn(move || bevy_client(data(), tx, seat, deck, tables, hud, 400_000))
+                scope.spawn(move || bevy_client(data(), tx, seat, deck, tables, hud, 400_000, flip))
             });
             let runs = clients.map(|c| c.join().unwrap());
             stop.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -1447,6 +1532,135 @@ pub(crate) mod tests {
         eprintln!("own down, enemy down, own hand, enemy hand: {seen:?}");
         assert!(seen[2][0] > 0 && seen[3][1] > 0, "{seen:?}");
         assert!(seen[0].iter().chain(&seen[1]).all(|&n| n > 0), "{seen:?}");
+    }
+
+    /// Player report of 2026-11-08 ("blue eyes for every card from opponent
+    /// hand"; a flip "does work but you can't tell till it's been flipped"):
+    /// through a whole match in which both seats turn their face-down
+    /// monsters face up with R2 before moving, on both screens and both
+    /// turns, the placeholder the copy holds for a card this seat may not
+    /// see (`hidden_card`, card 0 of the synthetic catalogue, never in a deck)
+    /// reaches no face: board cards face up or turning, the HUD's records,
+    /// the summon flight, the fusion show, the battle's cards, the hand row
+    /// (the other seat's is the hidden card); and the held card turns over
+    /// while its seat still chooses.
+    #[test]
+    fn the_placeholder_for_a_hidden_card_never_shows_and_a_flip_turns_while_choosing() {
+        use roses_client::duel_hud::{from_duel, ui_from_input, HudUpdate};
+        use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+        // [own screen, other screen]: updates with a held card turning
+        // (the move state), and updates with the other seat's card turning
+        // after its reveal; updates with the other seat's hand row.
+        static HELD_TURNING: AtomicU64 = AtomicU64::new(0);
+        static REMOTE_TURNING: AtomicU64 = AtomicU64::new(0);
+        static REMOTE_HAND: AtomicU64 = AtomicU64::new(0);
+        static REMOTE_HELD_UP: AtomicU64 = AtomicU64::new(0);
+        static REMOTE_HAND_DETAILS: AtomicU64 = AtomicU64::new(0);
+        let hud: HudFactory = Some(|_: &DuelPlay| {
+            Box::new(|p: &DuelPlay| {
+                let hidden = hidden_card(&p.data.catalogue);
+                assert_eq!(hidden, 0);
+                let seat = p.online.as_ref().unwrap().seat;
+                let duel = &p.session.duel;
+                let at = format!("seat {seat}, update {}, active {}, mode {:#x}", p.frames, duel.active, p.session.input.state());
+                // The board.
+                let input = p.overlay_input();
+                for u in input.units.iter().filter(|u| u.slot != 0 && (u.face_up || u.flip.is_some())) {
+                    let d = duel.units.iter().find(|d| (d.side, d.slot) == (u.side, u.slot));
+                    assert_ne!(
+                        u.card,
+                        hidden,
+                        "{at}: board card of side {} slot {} shows the placeholder (flip {:?}; copy {:?}; unknown {:?}; selection {:?})",
+                        u.side,
+                        u.slot,
+                        u.flip,
+                        d,
+                        d.map(|d| p.card_unknown(d.id)),
+                        p.session.input.mode
+                    );
+                }
+                let held = match &p.session.input.mode {
+                    Mode::Move(sel) => Some(sel),
+                    _ => None,
+                };
+                let animating = p.intro.is_some() || p.activation.is_some() || p.monster_fx.is_some();
+                if !animating {
+                    for u in input.units.iter().filter(|u| u.flip.is_some()) {
+                        let unit = duel.units.iter().find(|d| (d.side, d.slot) == (u.side, u.slot)).unwrap();
+                        if held.is_some_and(|s| s.unit == unit.id) && duel.active == seat {
+                            HELD_TURNING.fetch_add(1, Relaxed);
+                        } else if u.side != seat {
+                            REMOTE_TURNING.fetch_add(1, Relaxed);
+                        }
+                    }
+                }
+                if let Some(sel) = held.filter(|s| s.face_up && duel.active != seat) {
+                    if duel.unit(sel.unit).is_some_and(|u| !u.face_up) {
+                        REMOTE_HELD_UP.fetch_add(1, Relaxed);
+                    }
+                }
+                // The HUD's records, as the HUD layer builds them.
+                let previous = HudUpdate { d3c: duel.active, ..HudUpdate::default() };
+                let mut ui = ui_from_input(duel, &p.session.input, &previous, 0);
+                ui.hand_records = true;
+                ui.extra.own_side = p.hud_own_side();
+                let st = from_duel(duel, &ui, &p.data.catalogue, &p.hud_context(), &|_, _| 0, &previous);
+                for u in st.units.iter().filter(|u| u.slot > 0 && !u.face_down_hidden) {
+                    assert_ne!(u.card, hidden, "{at}: the HUD names the placeholder (side {}, slot {})", u.side, u.slot);
+                }
+                // The other seat's hand row: only hidden cards.
+                if p.unknown_hand() {
+                    assert_eq!(duel.active, seat ^ 1, "{at}");
+                    if p.hand_anim.is_some() {
+                        REMOTE_HAND.fetch_add(1, Relaxed);
+                    }
+                }
+                // The summon flight and the fusion show.
+                if let Some(f) = &p.summon_flight {
+                    assert_ne!(f.card.card, hidden, "{at}: the flying card");
+                    if duel.active != seat {
+                        assert!(f.fusion.is_none(), "{at}: the other seat's hidden chain is shown");
+                    }
+                }
+                // The details pane.
+                // (Card 0 is also seat 0's leader.)
+                if let Some(s) = p.details_shown.filter(|s| s.view.unit.and_then(|id| duel.unit(id)).is_none_or(|u| u.slot != 0)) {
+                    assert_ne!(s.view.card, hidden, "{at}: the details pane shows the placeholder ({:?})", s.view);
+                }
+                if let Some(view) = p.session.input.details.filter(|v| v.unit.is_none() && duel.active != seat) {
+                    if p.unknown_hand() && view.card == hidden {
+                        REMOTE_HAND_DETAILS.fetch_add(1, Relaxed);
+                    }
+                }
+                // The battle's two large cards.
+                if let Some(cards) = p.intro.as_ref().and_then(|i| i.versus_cards) {
+                    for (side, _, face) in cards {
+                        assert_ne!(face.0, hidden, "{at}: the battle card of side {side}");
+                    }
+                }
+            })
+        });
+        let setup = MatchSetup {
+            seed: 41,
+            terrain: roses_net::synthetic::board(),
+            leaders: roses_net::synthetic::leaders(),
+            deck_sources: roses_net::synthetic::decks(),
+            first: 0,
+            leader_abilities: [vec![], vec![]],
+            custom_rules: None,
+            leader_ranks: [0; 2],
+            destiny_rows: None,
+        };
+        let data = || bare_data(roses_net::synthetic::catalogue(), roses_net::synthetic::board());
+        let rules = (RulesTables::empty(), MatchOptions::default());
+        let (game, runs) = online_match_with(roses_net::synthetic::catalogue(), setup, roses_net::synthetic::submissions(), rules, data, hud, true);
+        for run in &runs {
+            assert_eq!(run.halted, None, "seat {}", run.seat);
+        }
+        assert!(game.ended().is_some());
+        let counts = [&HELD_TURNING, &REMOTE_TURNING, &REMOTE_HAND, &REMOTE_HELD_UP, &REMOTE_HAND_DETAILS].map(|n| n.load(Relaxed));
+        eprintln!("held card turning, other seat's card turning, other seat's hand row, other seat's held card set face up, other seat's hand details: {counts:?}");
+        assert!(counts.iter().all(|&n| n > 0), "{counts:?}");
     }
 
     /// Two headless Bevy clients (pad presses through `DuelPlay`, the input

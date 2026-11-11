@@ -1254,9 +1254,19 @@ fn a_full_monster_zone_sends_the_summon_to_the_graveyard() {
     units.push(placed(20, 9, 1, 1, p(0, 0), false, false));
     let mut d = board(units);
     d.sides[0].hand = vec![2];
+    // Four monsters: the preview has nothing to warn about.
+    let mut four = d.clone();
+    four.units.retain(|u| !(u.side == 0 && u.slot == 5));
+    let (four, _) = four
+        .apply(0, &DuelCommand::OpenSummon { cell: p(3, 5) }, &c)
+        .unwrap();
+    assert_eq!(four.summon_field_full(&[0], &c), None);
     let (d, _) = d
         .apply(0, &DuelCommand::OpenSummon { cell: p(3, 5) }, &c)
         .unwrap();
+    // The preview (state 0x45) warns: 0x117 "Maximum number of monsters on
+    // Field"; the summon still goes ahead.
+    assert_eq!(d.summon_field_full(&[0], &c), Some(true));
     let (d, _) = d
         .apply(0, &DuelCommand::ChooseSummon { hand: vec![0] }, &c)
         .unwrap();

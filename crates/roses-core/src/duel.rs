@@ -1817,6 +1817,45 @@ impl Duel {
     /// States 0x43–0x50: the chain is the own unit on the chosen cell (if
     /// any) followed by the marked hand cards in marking order; each step
     /// fuses, transforms, equips or drops the older element (FUSION.md §3).
+    /// The summon preview's field check (state 0x45, 0x1D7134..0x1D71E8):
+    /// the chain's result (0x270440; with no field unit and no marks the
+    /// cursor card) against the active side's own monsters (0x1E13D0) or
+    /// non-monsters (0x1E1470), the lifted field unit not counted. `Some`
+    /// when 5 are already there, so the result will go to the graveyard
+    /// (state 0x4D): `true` for a monster (message 0x117, "Maximum number of
+    /// monsters on Field"), `false` otherwise (0x118, spells). The original
+    /// only warns; the summon still goes ahead. `hand` = the picked hand
+    /// indices in marking order, as for [`DuelCommand::ChooseSummon`].
+    pub fn summon_field_full(&self, hand: &[usize], cards: &impl CardData) -> Option<bool> {
+        let s = self.active;
+        let cell = self.pending_summon?;
+        let side = self.sides.get(usize::from(s))?;
+        let ids: Vec<u16> = hand.iter().map(|&i| side.hand.get(i).copied()).collect::<Option<_>>()?;
+        let field = self.unit_at(cell).filter(|u| u.side == s && u.slot != 0).cloned();
+        let mut chain: Vec<ChainItem> = field.iter().cloned().map(ChainItem::Field).collect();
+        chain.extend(ids.iter().map(|&id| ChainItem::Hand(id)));
+        let mut acc = chain.first()?.clone();
+        for next in chain.into_iter().skip(1) {
+            acc = match self.chain_step(&acc, &next, cards).ok()? {
+                ChainStep::Fuse(result) => ChainItem::Hand(result),
+                ChainStep::Equip { .. } if cards.card(acc.card())?.is_monster() => acc,
+                ChainStep::Equip { .. } | ChainStep::Fail => next,
+            };
+        }
+        let monster = match &acc {
+            ChainItem::Field(u) => self.unit_card(u, cards).is_monster(),
+            ChainItem::Hand(id) => cards.card(*id)?.is_monster(),
+        };
+        let lifted = field.map(|f| f.id);
+        let count = self
+            .units
+            .iter()
+            .filter(|u| u.side == s && u.slot != 0 && Some(u.id) != lifted)
+            .filter(|u| if monster { (1..=MONSTER_SLOTS as u8).contains(&u.slot) } else { OTHER_SLOTS.contains(&u.slot) })
+            .count();
+        (count >= 5).then_some(monster)
+    }
+
     fn choose_summon(
         &mut self,
         hand: &[usize],

@@ -79,6 +79,9 @@ impl OnlineLink {
     pub fn away_note(&self) -> Option<&'static str> {
         match self.never {}
     }
+    pub fn card_unknown(&self, _: &roses_core::duel::DuelUnit) -> bool {
+        match self.never {}
+    }
 }
 
 /// Leave the input state on the field after a resynchronisation (only an
