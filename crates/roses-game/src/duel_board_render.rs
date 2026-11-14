@@ -4106,7 +4106,7 @@ fn build_summon_flight(
 ) {
     use roses_game::duel_versus::{CARD_CORNERS, CARD_UV};
     if let Some(show) = flight.fusion_playing() {
-        build_fusion_show(commands, layer, show, (view, polar), input, hud, meshes, materials, images, progress, fx);
+        build_fusion_show(commands, layer, (show, &flight.fusion_cards()), (view, polar), input, hud, meshes, materials, images, progress, fx);
         return;
     }
     if !flight.flying() {
@@ -4114,7 +4114,7 @@ fn build_summon_flight(
     }
     let card = &flight.card;
     let key = if card.front_facing(view) {
-        (card.card, card.level, card.attack, card.defence)
+        flight.face()
     } else {
         (roses_client::card_face::BACK_CARD, 0, 0, 0)
     };
@@ -4588,7 +4588,7 @@ fn build_activation(
 fn build_fusion_show(
     commands: &mut Commands,
     layer: &mut VersusLayer,
-    show: &roses_game::duel_summon::FusionShow,
+    (show, cards): (&roses_game::duel_summon::FusionShow, &[roses_game::duel_summon::ShownCard]),
     (view, polar): (&camera::Mat4, [f64; 3]),
     input: &BoardInput,
     hud: &mut DuelHud,
@@ -4601,7 +4601,7 @@ fn build_fusion_show(
     use roses_game::duel_versus::{CARD_CORNERS, CARD_UV, VersusCard};
     // The camera holds the summon cell's polar: the active side's board
     // setting (side 0 (pi/2, pi/4); side 1 from the other end).
-    for (n, shown) in show.cards().iter().enumerate() {
+    for (n, shown) in cards.iter().enumerate() {
         let Some(pose) = roses_game::duel_summon::shown_pose(view, polar, shown) else {
             continue;
         };

@@ -28,6 +28,15 @@ pub struct SummonFlight {
     pub unit: (u8, u8),
     /// A fusion chain's modules and the survivor's turn, played first.
     pub fusion: Option<FusionShow>,
+    /// The face every chain card is drawn with while the viewer may not
+    /// see the summoner's cards (`DuelPlay::summon_hidden`, set each
+    /// update): the side's hidden card id (`duel_play::HIDDEN_HAND` +
+    /// side). Every card of the chain is a group-2 record (hand cards
+    /// 0x1D9C70, the lifted field unit's byte copy 0x1D9540, a fusion
+    /// result 0x1D9F50) until the 0x4F commit, and the flight (0x1AFAC0)
+    /// and the pair modules alike draw it per update through 0x1DBA30(obj
+    /// +0x90) -> 0x1DBA80 -> 0x1DA6A0, the hand row's hiding [F].
+    pub hidden: Option<u16>,
 }
 
 /// The 0x46 pose: view (0, 8) at depth 800 through `view`, facing the camera.
@@ -89,7 +98,35 @@ impl SummonFlight {
             step: 0,
             unit,
             fusion: None,
+            hidden: None,
         }
+    }
+
+    /// `face` as this update draws it: the hidden card while the chain is
+    /// hidden ([`SummonFlight::hidden`]).
+    pub fn shown_face(&self, face: (u16, u8, i32, i32)) -> (u16, u8, i32, i32) {
+        match self.hidden {
+            Some(card) => (card, 0, 0, 0),
+            None => face,
+        }
+    }
+
+    /// The flying card's face this update (front side).
+    pub fn face(&self) -> (u16, u8, i32, i32) {
+        let c = &self.card;
+        self.shown_face((c.card, c.level, c.attack, c.defence))
+    }
+
+    /// The fusion presentation's cards this update, faces as drawn.
+    pub fn fusion_cards(&self) -> Vec<ShownCard> {
+        let Some(show) = self.fusion_playing() else {
+            return Vec::new();
+        };
+        let mut cards = show.cards();
+        for c in &mut cards {
+            c.face = self.shown_face(c.face);
+        }
+        cards
     }
 
     /// One update; true while the presentation lasts.

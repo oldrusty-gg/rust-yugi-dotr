@@ -3191,6 +3191,7 @@ impl DuelPlay {
                 (u.committed_face_up, u.committed_defence),
             );
             flight.fusion = fusion.take();
+            flight.hidden = self.chain_hidden(u.side, *card);
             self.summon_flight = Some(Box::new(flight));
             break;
         }
@@ -3233,6 +3234,33 @@ impl DuelPlay {
         let ctx = self.hud_context();
         let q = Query::new(duel, &self.data.catalogue, &ctx);
         q.hidden(Record::Hand { side, slot: 1, card }, side).then_some(side)
+    }
+
+    /// The summon chain of `side` (its flying card `card`) is hidden from
+    /// this screen: the face it is drawn with ([`HIDDEN_HAND`] + side).
+    /// Until the 0x4F commit every chain card is a group-2 record: the
+    /// hand records (0x1D9C70), the lifted field unit's 92-byte copy
+    /// (0x1D9540 copies it into a new group-2 record and points the slot-0
+    /// card object's +0x90 at it) and a fusion result (0x1D9F50); their
+    /// +0x40/+0x41 cell does not hold the record itself, so 0x1DA6A0 takes
+    /// its off-board path, the hand row's rule ([`DuelPlay::hand_hidden`]):
+    /// against the computer its whole chain, a face-up monster it powers up
+    /// included; on a 2-player HIDE screen unless R2 is held. The hand
+    /// drawer 0x1AFAC0 (picks, 0x4B centring, the flight) and every pair
+    /// module (C600 / C538 / 0x218..0x21E) draw each card per update as
+    /// 0x1DBA30(obj+0x90, obj) when it faces the camera, i.e. through
+    /// 0x1DBA80's 0x1DA6A0 call [F]. Offline only (online the other seat's
+    /// hidden chain is not shown and its card flies face down).
+    pub fn chain_hidden(&self, side: u8, card: u16) -> Option<u16> {
+        if self.online.is_some() || self.multi.is_some() {
+            return None;
+        }
+        use roses_core::duel::queries::{Query, Record};
+        let duel = &self.session.duel;
+        let ctx = self.hud_context();
+        let q = Query::new(duel, &self.data.catalogue, &ctx);
+        q.hidden(Record::Hand { side, slot: 1, card }, duel.active)
+            .then_some(HIDDEN_HAND + u16::from(side & 1))
     }
 
     /// The held card's face flip (+0x54, [`DuelPlay::face_flips`]): in the
@@ -5181,7 +5209,11 @@ impl DuelPlay {
             }
             return Some(Frame::default());
         }
+        // The chain's faces follow 0x1DA6A0 every update (R2 on a 2-player
+        // HIDE screen) [F; `DuelPlay::chain_hidden`].
+        let hidden = self.summon_flight.as_ref().map(|f| self.chain_hidden(f.unit.0, f.card.card));
         if let Some(flight) = &mut self.summon_flight {
+            flight.hidden = hidden.flatten();
             // 0x4C-0x50 and 0x16 do not read the pad.
             let more = flight.tick();
             if let Some(id) = flight.fusion_playing().and_then(|f| f.sound()) {
@@ -6111,10 +6143,13 @@ impl DuelHud {
         );
         let key = (key.0 | 0x8000, key.1);
         if !faces.board.contains_key(&key) {
-            let image = match faces
-                .assets
-                .face(card, level, attack, defence, FaceSize::Large)
-            {
+            // A hidden chain card (`SummonFlight::hidden`): the side's "?"
+            // card, 0x1DBA80's hidden compose (0x1DBE8C) in large mode.
+            let image = match card.checked_sub(HIDDEN_HAND) {
+                Some(side) => faces.assets.hidden_face(side as u8, FaceSize::Large),
+                None => faces.assets.face(card, level, attack, defence, FaceSize::Large),
+            };
+            let image = match image {
                 Ok(mut image) => {
                     for pixel in image.pixels.chunks_mut(4) {
                         for c in &mut pixel[..3] {
@@ -7665,6 +7700,185 @@ mod tests {
             cells.push(camera.cursor);
         }
         assert_eq!(cells, [(4, 4), (5, 3), (5, 2), (5, 1)]);
+    }
+
+    /// An offline duel on invented cards (not retail data): monsters 2..=29
+    /// of level 1 that all take power-up 752 (ATK/DEF +500, category 0),
+    /// side 0's deck alternating monster 2 and the power-up; `options` =
+    /// Custom Duel's params 0x1C / 0x1D; side 1 the ported computer when
+    /// `computer`, else a second pad.
+    fn power_up_play(options: [u32; 2], computer: bool) -> DuelPlay {
+        use roses_core::duel::{CardInfo, PowerUp, kind, terrain};
+        let card = |id: u16| CardInfo {
+            id,
+            kind: kind::WARRIOR,
+            level: if id < 2 { 6 } else { 1 },
+            attribute: 3,
+            attack: 500 + id,
+            defense: 400,
+            effects: [false; 5],
+            toon: false,
+            kind_index: 0,
+            entries: [None; 5],
+            equip_bits: [1, 0, 0, 0, 0, 0, 0],
+            power_up: None,
+        };
+        let mut list: Vec<CardInfo> = (0..752).map(card).collect();
+        list.push(CardInfo {
+            kind: 0x40,
+            level: 0,
+            attack: 0,
+            defense: 0,
+            equip_bits: [0; 7],
+            power_up: Some(PowerUp { category: 0, value: 500 }),
+            ..card(752)
+        });
+        let cards = Catalogue::new(list, []);
+        // Every hand holds both, whichever end the draws come from.
+        let deck0: Vec<u16> = (0..40).map(|i| if i % 2 == 0 { 2 } else { 752 }).collect();
+        let deck1: Vec<u16> = (0..40).map(|i| 2 + (i * 7 % 28) as u16).collect();
+        let controllers = [roses_core::duel::PAD_CONTROLLER, if computer { 0 } else { roses_core::duel::PAD_CONTROLLER + 1 }];
+        let setup = DuelSetup {
+            terrain: vec![terrain::NORMAL; 49],
+            leaders: [0, 1],
+            decks: [deck0, deck1],
+            first: 0,
+            leader_abilities: [vec![], vec![]],
+            controllers,
+        };
+        let (duel, _) = Duel::new(setup, &cards).unwrap();
+        let executable = vec![0u8; 0x1C_4D80 + 854 * 20 + 0x2000];
+        let tables = roses_core::duel::ai::weevil::Tables::new(&cards.fusions, &executable).unwrap();
+        let side = |leader| SideDeck { deck_record: 0, leader, cards: Vec::new() };
+        let data = DuelData {
+            catalogue: cards,
+            names: Vec::new(),
+            first_duel: FirstDuel {
+                board_map: 0,
+                terrain: duel.terrain.clone(),
+                first: 0,
+                sides: [side(0), side(1)],
+                computer_sides: if computer { vec![1] } else { Vec::new() },
+                planner_tier: 0,
+                leader_abilities: [vec![], vec![]],
+                opponent: 1,
+                leader_ranks: [0; 2],
+                player_side: 0,
+                custom_rules: None,
+                options: Some(options),
+                card_ranks: Default::default(),
+            },
+            tables,
+            executable,
+            messages: Vec::new(),
+            texsys: Vec::new(),
+            picmini: Vec::new(),
+            texeff: None,
+            pictures: None,
+        };
+        let seats = [None, computer.then(|| roses_core::duel::session::ComputerSeat::new(&duel, 1, 0))];
+        let mut play = DuelPlay::with_session(data, DuelSession::new(duel, seats), 7).unwrap();
+        for _ in 0..400 {
+            if play.session.input.state() == 0x18 && !play.animating() {
+                break;
+            }
+            play.update_pads([0, 0]);
+        }
+        assert_eq!(play.session.input.state(), 0x18);
+        play
+    }
+
+    /// Side 0 marks monster 2 and power-up 752 in its hand and summons them
+    /// onto the cell above its leader; returns every face the chain's
+    /// presentation drew (equip module cards, then the flight's front),
+    /// and whether the equip module ran.
+    fn power_up_faces(play: &mut DuelPlay, held: u16) -> (Vec<u16>, bool) {
+        use roses_core::duel::ai::pad as bits;
+        let press = |play: &mut DuelPlay, key: u16| {
+            play.update_pads([key | held, 0]);
+            for _ in 0..40 {
+                play.update_pads([held, 0]);
+            }
+        };
+        press(play, bits::SQUARE);
+        press(play, bits::UP);
+        press(play, bits::CROSS);
+        assert!(matches!(play.session.input.mode, Mode::Hand(_)), "{:?}", play.session.input.mode.state());
+        // The hand is drawn when the summon opens (OpenSummon).
+        let hand = play.session.duel.sides[0].hand.clone();
+        let at = |card: u16| hand.iter().position(|&c| c == card).unwrap_or_else(|| panic!("{card} in {hand:?}"));
+        let (monster, power_up) = (at(2), at(752));
+        let mut cursor = 0;
+        for target in [monster, power_up] {
+            while cursor != target {
+                press(play, bits::RIGHT);
+                cursor = (cursor + 1) % hand.len();
+            }
+            press(play, bits::UP);
+        }
+        press(play, bits::CROSS);
+        assert!(matches!(play.session.input.mode, Mode::Confirm(_)), "{:?}", play.session.input.mode.state());
+        play.update_pads([bits::CROSS | held, 0]);
+        let (mut faces, mut equip) = (Vec::new(), false);
+        for _ in 0..400 {
+            if let Some(f) = &play.summon_flight {
+                if let Some(show) = f.fusion_playing() {
+                    equip |= show.equip_running().is_some();
+                    faces.extend(f.fusion_cards().iter().map(|c| c.face.0));
+                } else if f.flying() {
+                    faces.push(f.face().0);
+                }
+            }
+            play.update_pads([held, 0]);
+        }
+        assert!(play.summon_flight.is_none());
+        (faces, equip)
+    }
+
+    /// Player report of 2026-11-13: "when opponent is using power up spells
+    /// you can see what cards theyre using before putting down on field".
+    /// The original draws every card of a summon chain (hand cards, the
+    /// lifted field unit's copy, a fusion result) as its group-2 record
+    /// through 0x1DA6A0, the hand row's hiding, in the pair modules and the
+    /// flight alike [F 0x1AFAC0, 0x106380 / module 0x218 0x1E003F4,
+    /// 0x1DBA80, 0x1D9540]: on a 2-player HIDE screen the side's "?" card
+    /// unless R2 is held; against the computer its whole chain. The port
+    /// drew the real faces (the power-up and the monster in the equip
+    /// module, every computer summon in the first half of its flight).
+    #[test]
+    fn a_hidden_sides_power_up_shows_only_its_hidden_card() {
+        use roses_core::duel::ai::pad as bits;
+        let hidden = HIDDEN_HAND;
+        // 2-player, Card Display HIDE: nothing but side 0's "?" card.
+        let mut play = power_up_play([3, 0], false);
+        let (faces, equip) = power_up_faces(&mut play, 0);
+        assert!(equip && !faces.is_empty());
+        assert!(faces.iter().all(|&f| f == hidden), "{faces:?}");
+        // R2 held on side 0's pad, or Card Display OPEN: the real cards.
+        for (options, held) in [([3, 0], bits::R2), ([3, 3], 0)] {
+            let mut play = power_up_play(options, false);
+            let (faces, equip) = power_up_faces(&mut play, held);
+            assert!(equip);
+            assert!(faces.contains(&752) && faces.contains(&2) && !faces.contains(&hidden), "{options:?} {faces:?}");
+        }
+        // Against the computer (param 0x1D = 3 as in every saved duel): the
+        // player's own chain shows, the computer's flights only its "?".
+        let mut play = power_up_play([3, 3], true);
+        assert!(play.chain_hidden(0, 2).is_none());
+        play.update_pads([bits::START, 0]);
+        let mut seen = Vec::new();
+        for _ in 0..6000 {
+            if play.session.duel.active == 0 && !seen.is_empty() {
+                break;
+            }
+            play.update_pads([0, 0]);
+            if let Some(f) = play.summon_flight.as_ref().filter(|f| f.flying() && f.unit.0 == 1) {
+                seen.push(f.face().0);
+                seen.extend(f.fusion_cards().iter().map(|c| c.face.0));
+            }
+        }
+        assert!(!seen.is_empty(), "the computer summoned nothing");
+        assert!(seen.iter().all(|&f| f == hidden + 1), "{seen:?}");
     }
 
     /// R1 in a move selection turns the held card sideways at once, over
