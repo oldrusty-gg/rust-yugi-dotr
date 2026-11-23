@@ -118,6 +118,7 @@ fn step(fx: &mut Fx, sp: u32) -> i32 {
             continue;
         }
         let t = slot + 0x2D4;
+        crate::guard::check_step("card 340 b378", fx.mem.read_u32(slot + 0x2F8), &[0x01E0_05E0, 0x01E0_0800, 0x01E0_1A70, 0x01E0_1B30]);
         // The entry tests each step in turn, reading the slot afresh: a line
         // that ended and spawned into its own slot has that sweep stepped
         // in the same pass.

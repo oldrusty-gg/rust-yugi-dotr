@@ -7001,6 +7001,7 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), String> {
         .insert_resource(BlurLayer::default())
         .insert_resource(arena_render)
         .add_plugins(plugins)
+        .add_plugins(crate::gpu_lost::plugin)
         .add_plugins(MaterialPlugin::<MapMaterial>::default())
         .add_plugins(MaterialPlugin::<BoardMaterial>::default())
         .add_plugins(MaterialPlugin::<OverlayMaterial>::default())

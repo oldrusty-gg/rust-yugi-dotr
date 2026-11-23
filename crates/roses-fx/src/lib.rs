@@ -655,6 +655,7 @@ pub mod framegs;
 pub mod packet;
 pub mod exe;
 pub mod fan;
+pub mod guard;
 pub mod fxlib;
 pub mod fxlib2;
 pub mod libm;

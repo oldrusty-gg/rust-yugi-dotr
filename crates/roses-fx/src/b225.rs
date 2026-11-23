@@ -210,7 +210,7 @@ fn step(fx: &mut Fx, sp: u32) -> i32 {
             }
             FLASH => flashes += 1,
             f => {
-                debug_assert!(false, "b225: unported task step {f:#x}");
+                crate::guard::unported_step("card 140 b225", f);
             }
         }
         // a3 after a step: the last rand's new state's low word - 1 (its

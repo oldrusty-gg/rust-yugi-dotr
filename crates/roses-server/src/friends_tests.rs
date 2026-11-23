@@ -239,7 +239,12 @@ impl Running {
     /// A hub with these settings (the test name, no limits and the test
     /// password cost are set here).
     pub(crate) fn with_settings(computer: bool, invite_uses: i64, settings: HubSettings, peer: Option<std::net::IpAddr>) -> (Self, String) {
-        let accounts = Accounts::in_memory().unwrap();
+        Self::with_accounts(computer, invite_uses, settings, peer, Accounts::in_memory().unwrap())
+    }
+
+    /// [`Running::with_settings`] on these accounts (a database file the
+    /// test also opens, as the operator's commands do).
+    fn with_accounts(computer: bool, invite_uses: i64, settings: HubSettings, peer: Option<std::net::IpAddr>, accounts: Accounts) -> (Self, String) {
         let invite = accounts.create_invite(invite_uses, None, None).unwrap();
         let (tx, rx) = mpsc::channel::<HubConn>();
         let stop = Arc::new(AtomicBool::new(false));
@@ -426,6 +431,8 @@ fn the_hub_signs_up_pairs_plays_and_returns_both_to_the_lobby() {
     let outcome = reports[0].state.ended.unwrap().0;
     assert_eq!(Some(outcome), reports[1].state.ended.map(|e| e.0));
     assert!(reports.iter().any(|r| r.reconnects == 1));
+    // A reconnect's snapshot, then every revision in turn: no gap.
+    assert!(reports.iter().all(|r| r.state.gaps == 0), "{:?}", reports.iter().map(|r| r.state.last_gap).collect::<Vec<_>>());
     // Both are told the result and are idle again.
     until(&mut yugi, "match over", |c| c.over.is_some());
     until(&mut kaiba, "match over", |c| c.over.is_some());
@@ -487,6 +494,7 @@ fn the_hub_plays_its_computer_and_rejoins_a_restarted_client() {
     )
     .unwrap();
     assert!(report.state.ended.is_some());
+    assert_eq!((report.state.gaps, report.state.last_gap), (0, None));
     until(&mut joey, "match over", |c| c.over.is_some() && sees(c, "Joey", PlayerState::Idle));
     let hub = hub.stop();
     let log = hub.accounts().matches(10).unwrap();
@@ -714,6 +722,136 @@ fn open_sign_up_needs_no_invite_but_limits_names_and_addresses() {
     sign_up(&mut c, "Yugi", "password1");
     until(&mut c, "invite needed", |c| c.auth_problem == Some(AuthProblem::BadInvite));
     hub.stop();
+}
+
+#[test]
+fn lookalikes_of_reserved_and_existing_names_are_refused_and_existing_accounts_keep_theirs() {
+    let (hub, invite) = Running::with(false, 5, true, None);
+    for name in ["C0mputer", "Adm1n", "K0nami"] {
+        let mut c = hub.lobby();
+        sign_up(&mut c, name, "password1");
+        until(&mut c, name, |c| c.auth_problem == Some(AuthProblem::ReservedName));
+    }
+    let mut yugi = hub.lobby();
+    sign_up(&mut yugi, "Yugi", "password1");
+    until(&mut yugi, "Yugi signs up", |c| c.user.as_deref() == Some("Yugi"));
+    // Open sign-up and an invite both refuse a lookalike as taken.
+    for name in ["Yuqi", "YUG1", "Yugl"] {
+        let mut c = hub.lobby();
+        sign_up(&mut c, name, "password1");
+        until(&mut c, name, |c| c.auth_problem == Some(AuthProblem::UsernameTaken));
+    }
+    let mut c = hub.lobby();
+    c.send(LobbyRequest::SignUp { username: "Yuq1".into(), password: "password1".into(), invite: invite.clone() });
+    until(&mut c, "invite lookalike", |c| c.auth_problem == Some(AuthProblem::UsernameTaken));
+    // Different enough names still sign up, and Yugi still logs in.
+    for name in ["Yugi2", "Joey"] {
+        let mut c = hub.lobby();
+        sign_up(&mut c, name, "password1");
+        until(&mut c, name, |c| c.user.as_deref() == Some(name));
+    }
+    let mut again = hub.lobby();
+    again.send(LobbyRequest::LogIn { username: "Yugi".into(), password: "password1".into() });
+    until(&mut again, "Yugi logs in", |c| c.user.as_deref() == Some("Yugi"));
+    hub.stop();
+
+    // An account made before this check keeps its name and logs in.
+    let accounts = Accounts::in_memory().unwrap();
+    let phc = accounts::hash_password("password1", PasswordCost::TEST);
+    let mut accounts = accounts;
+    accounts.sign_up_open("Yugi", &phc).unwrap().unwrap();
+    accounts.sign_up_open("Yuqi", &phc).unwrap().unwrap();
+    assert!(accounts.user("Yuqi").unwrap().is_some());
+    assert_eq!(accounts.lookalike_of("YUG1").unwrap().as_deref(), Some("Yugi"));
+    assert_eq!(accounts.lookalike_of("Yugi").unwrap().as_deref(), Some("Yuqi"));
+    assert_eq!(accounts.lookalike_of("Joey").unwrap(), None);
+}
+
+#[test]
+fn the_status_file_lists_who_is_online_and_a_ban_closes_their_connections() {
+    let dir = std::env::temp_dir().join(format!("roses-admin-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let db = dir.join("accounts.db");
+    let status = dir.join("hub-status.json");
+    let settings = HubSettings { open_signup: true, status_file: Some(status.clone()), ..HubSettings::default() };
+    let (hub, _) = Running::with_accounts(false, 1, settings, None, Accounts::open(&db).unwrap());
+    let mut yugi = hub.lobby();
+    sign_up(&mut yugi, "Yugi", "password1");
+    until(&mut yugi, "Yugi signs up", |c| c.user.as_deref() == Some("Yugi"));
+    let mut joey = hub.lobby();
+    sign_up(&mut joey, "Joey", "password1");
+    until(&mut joey, "Joey signs up", |c| c.user.as_deref() == Some("Joey"));
+    let read = || -> Option<crate::hub::HubStatus> { serde_json::from_str(&std::fs::read_to_string(&status).ok()?).ok() };
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut seen = None;
+    while Instant::now() < deadline {
+        if let Some(s) = read().filter(|s| s.online.len() == 2) {
+            seen = Some(s);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let seen = seen.expect("the status file lists both players");
+    assert_eq!(seen.online, ["Joey", "Yugi"]);
+    assert_eq!(seen.server, "Test server");
+    assert!(seen.matches.is_empty());
+    // The operator bans Joey from another process (here: another handle).
+    let operator = Accounts::open(&db).unwrap();
+    assert!(operator.set_disabled("joey", true).unwrap());
+    until(&mut joey, "Joey's connection closed", |c| !c.connected());
+    // Yugi stays; Joey cannot sign in again.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while read().is_none_or(|s| s.online != ["Yugi"]) {
+        assert!(Instant::now() < deadline, "the status file drops Joey");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let mut again = hub.lobby();
+    again.send(LobbyRequest::LogIn { username: "Joey".into(), password: "password1".into() });
+    until(&mut again, "refused", |c| c.auth_problem == Some(AuthProblem::Disabled));
+    hub.stop();
+    drop(operator);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn one_network_or_one_ipv6_home_cannot_use_up_the_servers_sign_ups() {
+    use crate::hub::{SignUpLimit, SignUps, SIGNUPS_PER_ADDRESS, SIGNUPS_PER_NETWORK, SIGNUPS_TOTAL, SIGNUP_WINDOW_MS};
+    use std::net::IpAddr;
+    let ip = |s: &str| Some(s.parse::<IpAddr>().unwrap());
+    let mut s = SignUps::default();
+    // One IPv6 home rotating through its /64 is one address.
+    for i in 0..SIGNUPS_PER_ADDRESS {
+        let a = format!("2001:db8:1:2::{:x}", i + 1);
+        assert_eq!(s.refusal(ip(&a), 0), None);
+        s.record(ip(&a), 0);
+    }
+    assert_eq!(s.refusal(ip("2001:db8:1:2:ffff::9"), 0), Some(SignUpLimit::Address));
+    // Its neighbour /64 is another address, inside the same /48 network.
+    assert_eq!(s.refusal(ip("2001:db8:1:3::1"), 0), None);
+    // Hosts side by side in one IPv4 /24: the network's limit, not the server's.
+    let mut s = SignUps::default();
+    for i in 0..SIGNUPS_PER_NETWORK {
+        let a = format!("198.51.100.{}", i + 1);
+        assert_eq!(s.refusal(ip(&a), 0), None, "{a}");
+        s.record(ip(&a), 0);
+    }
+    assert_eq!(s.refusal(ip("198.51.100.200"), 0), Some(SignUpLimit::Network));
+    assert_eq!(s.refusal(ip("::ffff:198.51.100.201"), 0), Some(SignUpLimit::Network), "IPv4-mapped counts as IPv4");
+    // Everyone else still signs up, until the server-wide hour is full.
+    let mut n = SIGNUPS_PER_NETWORK;
+    let mut net = 0;
+    while n < SIGNUPS_TOTAL {
+        net += 1;
+        let a = format!("203.0.{net}.1");
+        assert_eq!(s.refusal(ip(&a), 0), None, "{a}");
+        s.record(ip(&a), 0);
+        n += 1;
+    }
+    assert_eq!(s.refusal(ip("192.0.2.1"), 0), Some(SignUpLimit::ServerWide));
+    assert_eq!(s.refusal(None, 0), Some(SignUpLimit::ServerWide));
+    // The window slides.
+    assert_eq!(s.refusal(ip("198.51.100.200"), SIGNUP_WINDOW_MS), None);
 }
 
 #[test]

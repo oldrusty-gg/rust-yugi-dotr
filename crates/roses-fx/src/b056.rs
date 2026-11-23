@@ -226,7 +226,7 @@ fn step(fx: &mut Fx, sp: u32, param: i32) -> i32 {
             FAN => fan(fx, t, s),
             CHIP => chip(fx, t, s),
             RING => ring(fx, t),
-            f => debug_assert!(false, "b056: unknown task step {f:#x}"),
+            f => crate::guard::unported_step("card 402 b056", f),
         }
     }
     let dd = sp + 0x80;

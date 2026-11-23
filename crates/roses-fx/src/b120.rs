@@ -175,6 +175,11 @@ fn step(fx: &mut Fx, sp: u32, param: i32) -> i32 {
         if fx.mem.i16(t + 0x36) == 0 {
             continue;
         }
+        crate::guard::check_step(
+            "card 235 b120",
+            fx.mem.read_u32(t + 0x24),
+            &[0x01E0_1450, 0x01E0_1650, 0x01E0_16D0, 0x01E0_1890, 0x01E0_1940, 0x01E0_1EA0],
+        );
         let s = fx.mem.read_u32(t + 0x24);
         let (k64, row) = (u64::from(k), u64::from(D + 0x40 * k));
         let f = fx.sp;

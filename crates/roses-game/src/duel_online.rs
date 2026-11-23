@@ -430,7 +430,15 @@ impl OnlineLink {
 
     fn receive(&mut self, m: ServerMessage) {
         let was_active = self.state.view.as_ref().map(|v| v.board.active);
+        let gaps = self.state.gaps;
         self.state.apply(&m);
+        if self.state.gaps != gaps {
+            // Each update carries the whole view, so play goes on; the
+            // line is for a desync report (game.log).
+            if let Some((known, got)) = self.state.last_gap {
+                eprintln!("Online: revision {got} came after {known} (missed or repeated updates; {} so far)", self.state.gaps);
+            }
+        }
         if matches!(m, ServerMessage::Snapshot { .. }) {
             self.lost_at = None;
         }

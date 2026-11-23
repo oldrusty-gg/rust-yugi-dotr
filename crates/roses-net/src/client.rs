@@ -37,6 +37,11 @@ pub struct ClientState {
     /// The match's turn clock in milliseconds (from the welcome; none in a
     /// room without one).
     pub turn_limit: Option<u64>,
+    /// Updates whose revision was not the one after the last known
+    /// (missed or repeated updates; a snapshot starts the count afresh
+    /// from its revision), and the last such (known, received).
+    pub gaps: u64,
+    pub last_gap: Option<(u64, u64)>,
     next_seq: u64,
 }
 
@@ -196,6 +201,13 @@ impl ClientState {
                 self.last_decision = Some((*seq, decision.clone()));
             }
             ServerMessage::Update { revision, view, .. } => {
+                // Revisions come one by one after the snapshot; any other
+                // number means updates were lost or repeated. The view is
+                // whole either way, so this only counts it.
+                if (self.revision != 0 || self.view.is_some()) && *revision != self.revision + 1 {
+                    self.gaps += 1;
+                    self.last_gap = Some((self.revision, *revision));
+                }
                 self.revision = *revision;
                 self.view = Some(view.clone());
             }

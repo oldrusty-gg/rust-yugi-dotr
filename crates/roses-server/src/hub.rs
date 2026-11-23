@@ -21,8 +21,8 @@
 //! [`MAX_PENDING`] waiting for their first message ([`HANDSHAKE_MS`]),
 //! signed-out lobby connections closed after [`SIGNED_OUT_MS`], failed
 //! sign-ins limited per address, per name from one address and per name
-//! from all addresses ([`Attempts`]), open sign-ups limited per address and
-//! in total ([`SignUps`]), reserved names refused
+//! from all addresses ([`Attempts`]), open sign-ups limited per address,
+//! per network and in total ([`SignUps`]), reserved names refused
 //! (`roses_net::lobby::check_new_username`) and the server's
 //! [`NameFilter`] applied to new names. A `LobbyHello` with `account`
 //! set is an account-only connection (the launcher's Profile page): only
@@ -142,9 +142,13 @@ pub const ATTEMPT_WINDOW_MS: u64 = 15 * 60_000;
 /// page), so this leaves room for a household or a small club behind one
 /// address while one host cannot take every slot of `max_connections`.
 pub const CONNECTIONS_PER_ADDRESS: usize = 16;
-/// Open sign-ups (no invite) allowed per address, and on the whole server,
-/// in [`SIGNUP_WINDOW_MS`].
+/// Open sign-ups (no invite) allowed per address, per network and on the
+/// whole server, in [`SIGNUP_WINDOW_MS`]. An "address" is an IPv4 address
+/// or an IPv6 /64 (one home's prefix: its addresses are free to rotate);
+/// a "network" is an IPv4 /24 or an IPv6 /48 (one site or provider block),
+/// so a few hosts side by side cannot take the whole server's hour.
 pub const SIGNUPS_PER_ADDRESS: usize = 5;
+pub const SIGNUPS_PER_NETWORK: usize = 15;
 pub const SIGNUPS_TOTAL: usize = 60;
 pub const SIGNUP_WINDOW_MS: u64 = 3_600_000;
 /// The shortest time between two lists of who is online (ms) with
@@ -272,6 +276,39 @@ pub struct HubSettings {
     /// seed and a random seat order. MODES rooms' N-player matches use it
     /// as well (their seats are the room's in either case).
     pub fixed_seed: Option<u64>,
+    /// The operator's view ([`Hub::admin_pass`], `roses-server accounts
+    /// status`): every [`ADMIN_EVERY_MS`] the hub writes who is online and
+    /// which matches run to this file (none: not written).
+    pub status_file: Option<PathBuf>,
+}
+
+/// How often the hub writes [`HubSettings::status_file`] and closes the
+/// connections of accounts the operator disabled (`accounts ban`).
+pub const ADMIN_EVERY_MS: u64 = 5_000;
+
+/// One match in the status file.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct StatusMatch {
+    pub id: String,
+    /// "1v1", or the N-player room's mode.
+    pub kind: String,
+    pub players: Vec<String>,
+    /// Unix seconds.
+    pub started: i64,
+    pub ended: bool,
+    pub spectators: usize,
+}
+
+/// What the hub writes to [`HubSettings::status_file`].
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HubStatus {
+    /// Unix seconds.
+    pub written: i64,
+    pub server: String,
+    pub connections: usize,
+    /// Signed-in players with a game connection, by name.
+    pub online: Vec<String>,
+    pub matches: Vec<StatusMatch>,
 }
 
 impl Default for HubSettings {
@@ -296,6 +333,7 @@ impl Default for HubSettings {
             spectate_delay_turns: 0,
             multi_computer_delay_ms: 350,
             fixed_seed: None,
+            status_file: None,
         }
     }
 }
@@ -472,11 +510,44 @@ impl Attempts {
     }
 }
 
-/// Open sign-ups per address and in total in a sliding window.
+/// Open sign-ups per address, per network and in total in a sliding window
+/// (see [`SIGNUPS_PER_ADDRESS`]).
 #[derive(Default)]
 pub struct SignUps {
     by_address: HashMap<IpAddr, VecDeque<u64>>,
+    by_network: HashMap<IpAddr, VecDeque<u64>>,
     all: VecDeque<u64>,
+}
+
+/// Which limit refused an open sign-up ([`SignUps::refusal`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SignUpLimit {
+    Address,
+    Network,
+    ServerWide,
+}
+
+/// `ip` with only its first `bits` bits kept (an IPv4-mapped IPv6 address
+/// counts as its IPv4 address).
+fn ip_prefix(ip: IpAddr, v4_bits: u32, v6_bits: u32) -> IpAddr {
+    let ip = match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, IpAddr::V4),
+        ip => ip,
+    };
+    match ip {
+        IpAddr::V4(v4) => IpAddr::V4((u32::from(v4) & (u32::MAX << (32 - v4_bits))).into()),
+        IpAddr::V6(v6) => IpAddr::V6((u128::from(v6) & (u128::MAX << (128 - v6_bits))).into()),
+    }
+}
+
+/// The sign-up limits' "address" of a peer: IPv4 as is, IPv6 by its /64.
+pub fn signup_address(ip: IpAddr) -> IpAddr {
+    ip_prefix(ip, 32, 64)
+}
+
+/// The sign-up limits' "network" of a peer: IPv4 /24, IPv6 /48.
+pub fn signup_network(ip: IpAddr) -> IpAddr {
+    ip_prefix(ip, 24, 48)
 }
 
 impl SignUps {
@@ -486,19 +557,30 @@ impl SignUps {
         }
     }
 
+    fn count(map: &mut HashMap<IpAddr, VecDeque<u64>>, key: IpAddr, now: u64) -> usize {
+        map.get_mut(&key).map_or(0, |q| {
+            Self::trim(q, now);
+            q.len()
+        })
+    }
+
+    /// Which limit stops another open sign-up from `peer` now (none: allowed).
+    pub fn refusal(&mut self, peer: Option<IpAddr>, now: u64) -> Option<SignUpLimit> {
+        Self::trim(&mut self.all, now);
+        if let Some(ip) = peer {
+            if Self::count(&mut self.by_address, signup_address(ip), now) >= SIGNUPS_PER_ADDRESS {
+                return Some(SignUpLimit::Address);
+            }
+            if Self::count(&mut self.by_network, signup_network(ip), now) >= SIGNUPS_PER_NETWORK {
+                return Some(SignUpLimit::Network);
+            }
+        }
+        (self.all.len() >= SIGNUPS_TOTAL).then_some(SignUpLimit::ServerWide)
+    }
+
     /// Whether another open sign-up from `peer` is allowed now.
     pub fn allowed(&mut self, peer: Option<IpAddr>, now: u64) -> bool {
-        Self::trim(&mut self.all, now);
-        if self.all.len() >= SIGNUPS_TOTAL {
-            return false;
-        }
-        match peer.and_then(|ip| self.by_address.get_mut(&ip)) {
-            Some(q) => {
-                Self::trim(q, now);
-                q.len() < SIGNUPS_PER_ADDRESS
-            }
-            None => true,
-        }
+        self.refusal(peer, now).is_none()
     }
 
     /// Whether the server-wide limit (not one address's) is reached.
@@ -510,14 +592,17 @@ impl SignUps {
     pub fn record(&mut self, peer: Option<IpAddr>, now: u64) {
         self.all.push_back(now);
         if let Some(ip) = peer {
-            self.by_address.entry(ip).or_default().push_back(now);
+            self.by_address.entry(signup_address(ip)).or_default().push_back(now);
+            self.by_network.entry(signup_network(ip)).or_default().push_back(now);
         }
         // Forget addresses whose window is over (bounded memory).
-        if self.by_address.len() > 4096 {
-            self.by_address.retain(|_, q| {
-                Self::trim(q, now);
-                !q.is_empty()
-            });
+        for map in [&mut self.by_address, &mut self.by_network] {
+            if map.len() > 4096 {
+                map.retain(|_, q| {
+                    Self::trim(q, now);
+                    !q.is_empty()
+                });
+            }
         }
     }
 }
@@ -561,6 +646,10 @@ pub struct Hub {
     /// Email addresses and password reset (none: this server sends no
     /// email; see [`Hub::with_email`]).
     email: Option<email_hub::EmailHub>,
+    /// When [`Hub::admin_pass`] last ran (none: not yet).
+    admin_at: Option<u64>,
+    /// Writing the status file failed (logged once until it works again).
+    status_failed: bool,
 }
 
 impl Hub {
@@ -625,6 +714,8 @@ impl Hub {
             players_dirty: false,
             players_sent_at: None,
             email: None,
+            admin_at: None,
+            status_failed: false,
         }
     }
 
@@ -751,6 +842,10 @@ impl Hub {
         let actions = self.lobby.tick(now);
         self.act(actions, now);
         self.send_players(now);
+        if self.admin_at.is_none_or(|t| now.saturating_sub(t) >= ADMIN_EVERY_MS) {
+            self.admin_at = Some(now);
+            self.admin_pass(now);
+        }
         if now.saturating_sub(self.last_prune) > 3_600_000 {
             self.last_prune = now;
             match self.accounts.prune_sessions() {
@@ -903,6 +998,99 @@ impl Hub {
     }
 
     /// Close and forget a connection, telling its match or the lobby.
+    /// The operator's commands' side ([`ADMIN_EVERY_MS`]): close every
+    /// connection of an account disabled since (`roses-server accounts ban`
+    /// runs in another process; signing in again is already refused), then
+    /// write the status file.
+    fn admin_pass(&mut self, now: u64) {
+        let disabled = match self.accounts.disabled_keys() {
+            Ok(keys) => keys,
+            Err(e) => {
+                self.log(&format!("account database error: {e}"));
+                Default::default()
+            }
+        };
+        if !disabled.is_empty() {
+            let banned = |name: &str| disabled.contains(&username_key(name));
+            let mut gone: Vec<ConnId> = self
+                .conns
+                .iter()
+                .filter(|(_, c)| matches!(&c.role, Role::Lobby { user: Some(u), .. } if banned(&u.name)))
+                .map(|(id, _)| *id)
+                .collect();
+            for h in self.matches.values() {
+                gone.extend(h.players.iter().zip(&h.seats).filter(|(p, _)| banned(p)).filter_map(|(_, s)| *s));
+            }
+            for h in self.multis.values() {
+                gone.extend(h.players.iter().zip(&h.seats).filter(|(p, _)| banned(p)).filter_map(|(_, s)| *s));
+            }
+            if !gone.is_empty() {
+                self.log(&format!("closed {} connections of disabled accounts", gone.len()));
+                for id in gone {
+                    self.drop_conn(id, now);
+                }
+            }
+        }
+        if let Some(path) = self.settings.status_file.clone() {
+            let status = self.status();
+            let written = serde_json::to_vec_pretty(&status).map_err(|e| e.to_string()).and_then(|bytes| {
+                let tmp = path.with_extension("json.new");
+                std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, &path)).map_err(|e| e.to_string())
+            });
+            if let Err(e) = written {
+                // Once, not every pass.
+                if !self.status_failed {
+                    self.status_failed = true;
+                    self.log(&format!("writing the status file {} failed: {e}", path.display()));
+                }
+            } else {
+                self.status_failed = false;
+            }
+        }
+    }
+
+    /// Who is online and which matches run ([`HubSettings::status_file`]).
+    pub fn status(&self) -> HubStatus {
+        let mut online: Vec<String> = self
+            .conns
+            .values()
+            .filter_map(|c| match &c.role {
+                Role::Lobby { user: Some(u), account: false, .. } => Some(u.name.clone()),
+                _ => None,
+            })
+            .collect();
+        online.sort_by_key(|n| username_key(n));
+        online.dedup();
+        let mut matches: Vec<StatusMatch> = self
+            .matches
+            .iter()
+            .map(|(id, h)| StatusMatch {
+                id: id.clone(),
+                kind: "1v1".into(),
+                players: h.players.to_vec(),
+                started: h.created_wall,
+                ended: h.ended_at.is_some(),
+                spectators: h.spectators.len(),
+            })
+            .collect();
+        matches.extend(self.multis.iter().map(|(id, h)| StatusMatch {
+            id: id.clone(),
+            kind: format!("{:?}", h.game.settings().mode),
+            players: h.players.clone(),
+            started: h.created_wall,
+            ended: h.ended_at.is_some(),
+            spectators: h.spectators.len(),
+        }));
+        matches.sort_by_key(|m| m.started);
+        HubStatus {
+            written: accounts::now_seconds(),
+            server: self.settings.name.clone(),
+            connections: self.conns.len(),
+            online,
+            matches,
+        }
+    }
+
     fn drop_conn(&mut self, id: ConnId, now: u64) {
         let Some(mut c) = self.conns.remove(&id) else { return };
         c.conn.close();
@@ -1707,13 +1895,22 @@ impl Hub {
     }
 
     /// A name for a new account: the protocol's rules and reserved words
-    /// (`check_new_username`), then this server's [`NameFilter`].
-    fn check_new_name(&self, name: &str) -> Result<(), AuthProblem> {
+    /// (`check_new_username`), then this server's [`NameFilter`], then
+    /// lookalikes ([`crate::name_filter::skeleton`]): of a reserved name
+    /// (refused as reserved) or of an existing account (refused as taken;
+    /// the existing account keeps its name).
+    fn check_new_name(&mut self, name: &str) -> Result<(), AuthProblem> {
         check_new_username(name)?;
-        if self.settings.name_filter.allows(name) {
-            Ok(())
-        } else {
-            Err(AuthProblem::ReservedName)
+        if !self.settings.name_filter.allows(name) || crate::name_filter::looks_reserved(name) {
+            return Err(AuthProblem::ReservedName);
+        }
+        match self.accounts.lookalike_of(name) {
+            Ok(None) => Ok(()),
+            Ok(Some(_)) => Err(AuthProblem::UsernameTaken),
+            Err(e) => {
+                self.log(&format!("account database error: {e}"));
+                Err(AuthProblem::Busy)
+            }
         }
     }
 
@@ -1742,6 +1939,11 @@ impl Hub {
                         return self.auth_failed(id, AuthProblem::BadInvite, now);
                     }
                     if let Err(p) = self.check_new_name(&username) {
+                        if p == AuthProblem::UsernameTaken {
+                            // A lookalike of an existing name: counted as
+                            // a taken name is, below.
+                            self.attempts.failed(peer, None, now);
+                        }
                         return self.auth_failed(id, p, now);
                     }
                     match self.accounts.user(&username) {
@@ -1757,10 +1959,14 @@ impl Hub {
                             return self.auth_failed(id, AuthProblem::Busy, now);
                         }
                     }
-                    if !self.signups.allowed(peer, now) {
+                    if let Some(limit) = self.signups.refusal(peer, now) {
                         // The address itself is not logged (the log keeps no addresses).
-                        let total = self.signups.total_full(now);
-                        self.log(&format!("open sign-up limit reached ({})", if total { "server-wide" } else { "one address" }));
+                        let which = match limit {
+                            SignUpLimit::Address => "one address",
+                            SignUpLimit::Network => "one network",
+                            SignUpLimit::ServerWide => "server-wide",
+                        };
+                        self.log(&format!("open sign-up limit reached ({which})"));
                         return self.auth_failed(id, AuthProblem::SignUpLimit, now);
                     }
                     self.signups.record(peer, now);

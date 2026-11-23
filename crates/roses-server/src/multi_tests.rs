@@ -87,6 +87,8 @@ fn four_computers_and_no_player_play_a_match_to_its_end_and_the_record_replays()
         // The player kept receiving the match after being knocked out.
         assert_eq!(clients[0].revision, g.revision());
         assert!(matches!(clients[0].status, Some(MatchStatus::Ended { .. })));
+        // Every revision came, one after another (issue 11's check).
+        assert_eq!((clients[0].gaps, clients[0].last_gap), (0, None));
     }
 }
 

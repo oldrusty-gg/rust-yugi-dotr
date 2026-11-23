@@ -302,6 +302,23 @@ impl Accounts {
         rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
     }
 
+    /// An existing account whose name looks like `name` (same
+    /// [`crate::name_filter::skeleton`]) without being it, ignoring case.
+    /// Existing accounts are never refused by this: it is asked only for a
+    /// new name.
+    pub fn lookalike_of(&self, name: &str) -> Result<Option<String>, String> {
+        let (key, skel) = (username_key(name), crate::name_filter::skeleton(name));
+        let mut st = self.db.prepare("SELECT name, name_key FROM users").map_err(|e| e.to_string())?;
+        let mut rows = st.query([]).map_err(|e| e.to_string())?;
+        while let Some(r) = rows.next().map_err(|e| e.to_string())? {
+            let (other, other_key): (String, String) = (r.get(0).map_err(|e| e.to_string())?, r.get(1).map_err(|e| e.to_string())?);
+            if other_key != key && crate::name_filter::skeleton(&other) == skel {
+                return Ok(Some(other));
+            }
+        }
+        Ok(None)
+    }
+
     /// Create `username` with the hash `phc`, consuming one use of the
     /// invite, in one transaction. A reset invite for an existing account
     /// replaces its password and ends its sessions instead. Returns the
@@ -370,6 +387,13 @@ impl Accounts {
             })
             .optional()
             .map_err(|e| e.to_string())
+    }
+
+    /// The name keys of every disabled account.
+    pub fn disabled_keys(&self) -> Result<std::collections::HashSet<String>, String> {
+        let mut st = self.db.prepare("SELECT name_key FROM users WHERE disabled <> 0").map_err(|e| e.to_string())?;
+        let rows = st.query_map([], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
+        rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
     }
 
     pub fn set_disabled(&self, name: &str, disabled: bool) -> Result<bool, String> {

@@ -59,6 +59,8 @@ mod duel_board_render;
 mod duel_model_render;
 mod duel_units_render;
 mod frame_stats;
+/// A lost GPU device ends the game with a plain line (issue #21).
+mod gpu_lost;
 mod render_cost;
 mod ending_render;
 mod mode_fade;
@@ -4319,6 +4321,7 @@ Video recorder (a tool, docs/ADDITIONS.md): add --record <new.mp4> [--record-siz
         .insert_resource(InputScene(loaded))
         .add_plugins(plugins)
         .add_plugins(frame_stats::plugin)
+        .add_plugins(gpu_lost::plugin)
         .add_plugins(render_cost::plugin)
         .add_plugins(MaterialPlugin::<CapturedMaterial>::default())
         .add_plugins(MaterialPlugin::<CompositeMaterial>::default())
@@ -4535,6 +4538,7 @@ Video recorder (a tool, docs/ADDITIONS.md): add --record <new.mp4> [--record-siz
     Ok(())
 }
 fn main() {
+    gpu_lost::install_panic_hook();
     if let Err(error) = run() {
         eprintln!("{error}");
         std::process::exit(1);

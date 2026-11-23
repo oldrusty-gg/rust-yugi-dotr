@@ -184,6 +184,10 @@ fn step(fx: &mut Fx, sp: u32, param: i32, v: Variant) -> i32 {
         if fx.mem.i16(t + 0x36) == 0 {
             continue;
         }
+        if v.b355 {
+            // b355's own addresses (DISPATCH-AUDIT.md); b064 skips none.
+            crate::guard::check_step("card 248 b355", fx.mem.read_u32(t + 0x24), &[0x01E0_17D0, 0x01E0_19F0, 0x01E0_2010]);
+        }
         for (i, &(a, size)) in STEPS.iter().enumerate() {
             if fx.mem.read_u32(t + 0x24) == v.at(a) {
                 let ra = v.at(0x01E0_32F8 + 0x20 * i as u32);

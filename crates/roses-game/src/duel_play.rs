@@ -8782,7 +8782,9 @@ mod tests {
         hud.render();
         let plain = hud.layer.clone();
         let plain_prims = hud.frame.as_ref().unwrap().prims.len();
-        play.seat_names = Some(["Yugi".into(), "Pegasus Crawford".into()]);
+        // A 12-letter account name (issue 13: it read "CHRISTOP") and a
+        // character's two words.
+        play.seat_names = Some(["Christopher1".into(), "Pegasus Crawford".into()]);
         hud.update(&play);
         hud.render();
         let named = hud.layer.clone();

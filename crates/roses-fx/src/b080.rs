@@ -160,7 +160,7 @@ fn step(fx: &mut Fx, sp: u32) -> i32 {
             RING => run_step(fx, t, 0x20, 0x01E0_34C0, |fx, t| ring(fx, RING, t)),
             LIGHT => run_step(fx, t, 0x30, 0x01E0_3530, light),
             f => {
-                debug_assert!(false, "b080: unported task step {f:#x}");
+                crate::guard::unported_step("card 438 b080", f);
             }
         }
     }

@@ -34,6 +34,9 @@ const D: u32 = crate::bmodule::DATA_AREA;
 const SPR: u32 = 0x7000_0000;
 const POOL_A: u32 = D + 0x2A0;
 const POOL_B: u32 = D + 0x2A00;
+/// Steps the entry tests that are never spawned (DISPATCH-AUDIT.md; not
+/// ported, logged if one turns up: [`crate::guard`]).
+const B582_UNPORTED: &[u32] = &[0x01E0_2680, 0x01E0_2970, 0x01E0_3470, 0x01E0_35E0, 0x01E0_36A0, 0x01E0_36F0];
 const POS: u32 = D + 0x250;
 const TIMER: u32 = D + 0x35B0;
 const COLOUR: u32 = D + 0x35B4;
@@ -166,6 +169,7 @@ fn step(fx: &mut Fx, sp: u32, param: i32, at: u32) -> i32 {
         if fx.mem.i16(t + 0x2C) == 0 {
             continue;
         }
+        crate::guard::check_step("card 597 b582", fx.mem.read_u32(t + 0x10), B582_UNPORTED);
         let s = fx.mem.read_u32(t + 0x10);
         if s == 0x01E0_2100 {
             drop_step(fx, t, at);
@@ -179,6 +183,7 @@ fn step(fx: &mut Fx, sp: u32, param: i32, at: u32) -> i32 {
         if fx.mem.i16(t + 0x36) == 0 {
             continue;
         }
+        crate::guard::check_step("card 597 b582", fx.mem.read_u32(t + 0x24), B582_UNPORTED);
         let s3 = D + 0x40 * k;
         match fx.mem.read_u32(t + 0x24) {
             0x01E0_2210 => tint_step(fx, t),

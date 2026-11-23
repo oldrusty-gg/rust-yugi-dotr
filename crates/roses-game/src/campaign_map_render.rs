@@ -2457,6 +2457,7 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), String> {
             decoded: BTreeMap::new(),
         })
         .add_plugins(plugins)
+        .add_plugins(crate::gpu_lost::plugin)
         .add_plugins(MaterialPlugin::<MapMaterial>::default())
         .add_plugins(MaterialPlugin::<PresentMaterial>::default())
         .add_plugins(MaterialPlugin::<CloudMaterial>::default())

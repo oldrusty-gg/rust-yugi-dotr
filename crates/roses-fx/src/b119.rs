@@ -167,6 +167,7 @@ fn step(fx: &mut Fx, sp: u32, param: i32) -> i32 {
         if fx.mem.i16(t + 0x36) == 0 {
             continue;
         }
+        crate::guard::check_step("card 164 b119", fx.mem.read_u32(t + 0x24), &[0x01E0_3690, 0x01E0_41C0]);
         let s = fx.mem.read_u32(t + 0x24);
         // The step's saved registers (the entry's s0 = D, s1 = 0, s2 = D +
         // 0x40 k) and return address, left below the entry's frame.

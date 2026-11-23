@@ -10,6 +10,7 @@ pub mod hub;
 pub mod loadtest;
 pub mod lobby;
 pub mod multi;
+pub mod multibench;
 pub mod name_filter;
 pub mod online;
 pub mod play;

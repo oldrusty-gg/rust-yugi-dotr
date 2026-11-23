@@ -51,6 +51,44 @@ fn forms(name: &str) -> [String; 2] {
     [lower, plain]
 }
 
+/// What a name looks like, for telling lookalikes apart: lower case, with
+/// `rn` read as `m`, `vv` as `w`, `I` / `i` / `1` as `l`, `q` as `g` and
+/// the digits that pass for letters as those letters (`0` o, `2` z, `3` e,
+/// `4` a, `5` s, `6` and `8` b, `7` t, `9` g). Two names with one skeleton
+/// read the same at a glance (`Yugi`, `Yuqi`, `YUG1`; `Il1ya`, `llla`).
+pub fn skeleton(name: &str) -> String {
+    let lower = name.to_ascii_lowercase().replace("rn", "m").replace("vv", "w");
+    lower
+        .chars()
+        .map(|c| match c {
+            '0' => 'o',
+            '1' | 'i' => 'l',
+            '2' => 'z',
+            '3' => 'e',
+            '4' => 'a',
+            '5' => 's',
+            '6' | '8' => 'b',
+            '7' => 't',
+            '9' | 'q' => 'g',
+            c => c,
+        })
+        .collect()
+}
+
+/// Whether a new name looks like one of the protocol's reserved names
+/// (`roses_net::lobby::RESERVED_NAMES` and the staff words, which
+/// `check_new_username` compares letter for letter): `C0mputer`, `Adm1n`,
+/// `M0derator7`. The name itself has passed `check_new_username`.
+pub fn looks_reserved(name: &str) -> bool {
+    const STAFF: [&str; 12] =
+        ["admin", "administrator", "moderator", "mod", "server", "system", "root", "owner", "staff", "support", "official", "computer"];
+    let whole = skeleton(name);
+    let stem = skeleton(name.trim_end_matches(|c: char| c.is_ascii_digit()));
+    roses_net::lobby::RESERVED_NAMES.iter().any(|r| skeleton(r) == whole)
+        || STAFF.iter().any(|s| skeleton(s) == stem)
+        || ["admin", "moderator"].iter().any(|p| whole.starts_with(&skeleton(p)))
+}
+
 impl NameFilter {
     /// The built-in list only.
     pub fn builtin() -> Self {
@@ -130,6 +168,22 @@ mod tests {
         }
         assert!(NameFilter::parse("two words").is_err());
         assert!(NameFilter::parse("=").is_err());
+    }
+
+    #[test]
+    fn lookalikes_share_a_skeleton_and_reserved_lookalikes_are_caught() {
+        for (a, b) in [("Yugi", "Yuqi"), ("Yugi", "YUG1"), ("Kaiba", "Ka1ba"), ("Bakura", "8akura"), ("Mai", "Mal"), ("Marik", "Mar1k"), ("Weevil", "VVeevil"), ("Mirror", "Mlrror"), ("Arnold", "Amold")] {
+            assert_eq!(skeleton(a), skeleton(b), "{a} / {b}");
+        }
+        for (a, b) in [("Yugi", "Yugi2"), ("Joey", "Joel"), ("Tea", "Ted"), ("Clark", "Dark"), ("Mai", "May")] {
+            assert_ne!(skeleton(a), skeleton(b), "{a} / {b}");
+        }
+        for reserved in ["C0mputer", "Adm1n", "ADMlN", "Adm1nistrator", "M0derator7", "M0d", "R00t", "0fficial", "K0nami", "Rose5", "Sy5tem12", "Guest", "Gue5t"] {
+            assert!(looks_reserved(reserved), "{reserved}");
+        }
+        for ordinary in ["Yugi", "Admiral", "Modest", "Rooted", "Kaiba", "Joey", "Serverus", "Hostess", "Players"] {
+            assert!(!looks_reserved(ordinary), "{ordinary}");
+        }
     }
 
     #[test]

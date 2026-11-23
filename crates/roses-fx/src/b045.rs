@@ -145,6 +145,11 @@ fn step(fx: &mut Fx, sp: u32) -> i32 {
         if fx.mem.i16(t + 0x36) == 0 {
             continue;
         }
+        crate::guard::check_step(
+            "card 229 b045",
+            fx.mem.read_u32(t + 0x24),
+            &[0x01E0_2060, 0x01E0_21B0, 0x01E0_2A00, 0x01E0_2B90, 0x01E0_3130, 0x01E0_3440, 0x01E0_3500],
+        );
         // The steps' prologue saves: the entry's s0 = D, s1 = 0, s2 = D +
         // 0x40 k, s3 = k (s4 / s5 the runner's: 0 [H]).
         let low = fx.sp;

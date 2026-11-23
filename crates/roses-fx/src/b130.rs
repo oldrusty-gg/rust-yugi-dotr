@@ -187,6 +187,7 @@ fn step(fx: &mut Fx, sp: u32, param: i32) -> i32 {
         if fx.mem.i16(t + 0x36) == 0 {
             continue;
         }
+        crate::guard::check_step("card 553 b130", fx.mem.read_u32(t + 0x24), &[0x01E0_0890, 0x01E0_0CA0]);
         let call = |fx: &mut Fx, size: u32, ra: u32, g: fn(&mut Fx, u32)| {
             let s = fx.enter(size);
             if size == 0x20 {

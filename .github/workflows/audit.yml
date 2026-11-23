@@ -1,0 +1,41 @@
+# Check both lock files (the workspace's and the game's, crates/roses-game)
+# against the RustSec advisory database: on every change to a manifest or
+# lock file, and weekly, since new advisories appear for unchanged
+# dependencies. A vulnerability fails the job; unmaintained or yanked
+# crates are listed as warnings.
+name: Dependency audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - ".github/workflows/audit.yml"
+  pull_request:
+    paths:
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - ".github/workflows/audit.yml"
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  cargo-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: Audit the workspace
+        run: cargo audit --file Cargo.lock
+      - name: Audit the game
+        run: cargo audit --file crates/roses-game/Cargo.lock

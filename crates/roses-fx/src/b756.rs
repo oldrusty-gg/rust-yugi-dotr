@@ -398,7 +398,7 @@ fn run_task(fx: &mut Fx, f: u32, t: u32, k: u32) {
             object(fx, t, sp);
             fx.leave(0x30);
         }
-        f => debug_assert!(false, "b756: unknown task step {f:#x}"),
+        f => crate::guard::unported_step("card 152 b756", f),
     }
 }
 

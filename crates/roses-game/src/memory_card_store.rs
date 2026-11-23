@@ -385,6 +385,36 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// Issue #21: a write cut off before its rename (the game quitting
+    /// on a lost GPU device, a full disk) leaves the last complete save.
+    #[test]
+    fn a_save_cut_off_before_its_rename_keeps_the_last_complete_save() {
+        let dir = temp("cut");
+        let mut card = VirtualCard::at(dir.join("slot1"));
+        let block = CardBlock::empty(1);
+        let map = CampaignSave::after_landing();
+        let file = build_file(&block, &map, &[0x2005; 12], None).unwrap();
+        card.write(&file).unwrap();
+        // A half-written staging file from a write that never finished.
+        let staging = card.data_path().with_extension("new");
+        std::fs::write(&staging, &file[..100]).unwrap();
+        assert_eq!(std::fs::read(card.data_path()).unwrap(), file);
+        assert!(restore(&card.read().unwrap()).is_ok());
+        // A write that fails (its staging path is a folder) keeps it too.
+        std::fs::remove_file(&staging).unwrap();
+        std::fs::create_dir_all(&staging).unwrap();
+        let mut other = file.clone();
+        other[200] ^= 0xFF;
+        assert!(card.write(&other).is_err());
+        assert_eq!(std::fs::read(card.data_path()).unwrap(), file);
+        // The next save point writes over the leftover as usual.
+        std::fs::remove_dir_all(&staging).unwrap();
+        std::fs::write(&staging, b"partial").unwrap();
+        card.write(&other).unwrap();
+        assert_eq!(std::fs::read(card.data_path()).unwrap(), other);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn the_interim_json_save_migrates_once() {
         let dir = temp("mig");

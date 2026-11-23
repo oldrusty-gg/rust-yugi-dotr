@@ -2811,26 +2811,76 @@ impl Builder<'_> {
     /// A player's name where the original draws the plate `plate` at
     /// (x, y): the small gold font, proportional, centred on the plate
     /// (letters and digits, upper case; anything else is a space, as the
-    /// server's names never have).
+    /// server's names never have). A port addition: the original only ever
+    /// draws its fixed PLAYER / ENEMY plates here.
     #[cfg_attr(not(feature = "online"), allow(dead_code))]
     fn name_plate(&mut self, plate: Descriptor, name: &[u8], x: i32, y: i32) {
-        let mut text: Vec<u8> = name.iter().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { b' ' }).collect();
-        // No wider than the plate's room: the stats beside the portrait leave
-        // about 64 pixels, and this is already the smallest gold font (about
-        // 8 letters; 12 take 91 to 108). A longer name keeps its first word
-        // (a character's, "PEGASUS CRAWFORD"), else as many letters as fit.
-        const ROOM: i32 = 64;
-        if self.gold_measure(1, 1, &text).0 > ROOM {
-            if let Some(first) = text.split(|&c| c == b' ').find(|w| !w.is_empty()).map(<[u8]>::to_vec) {
-                text = first;
+        let text: Vec<u8> = name.iter().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { b' ' }).collect();
+        let lines = self.plate_lines(&text);
+        let lh = self.gold_measure(1, 1, b"A").1;
+        // Centred on the plate as a block. Two lines are set 2 pixels closer
+        // than the font's 12-pixel line (its letters are about 9 high), so
+        // they stay on the 20-pixel plate, off the portrait's frame.
+        let step = lh - 2;
+        let block = lh + step * (lines.len() as i32 - 1);
+        let mut cy = y + (plate.height() - block) / 2;
+        for line in lines {
+            self.gold_string(x + plate.width() / 2, cy, 1, 3, &line);
+            cy += step;
+        }
+    }
+
+    /// The plate text as lines no wider than [`PLATE_ROOM`]: one line when
+    /// it fits (about 8 letters of this, the smallest gold font), else two,
+    /// split at a space when both halves fit ("REX" / "RAPTOR"), else
+    /// between the letters that make the halves most even ("CHRIST" /
+    /// "OPHER1": a 12-letter account name takes 91 to 108 pixels, so every
+    /// account name fits on two lines). Words that fit on no two lines keep
+    /// the first ("PEGASUS"); what still does not fit loses its last letters.
+    #[cfg_attr(not(feature = "online"), allow(dead_code))]
+    fn plate_lines(&self, text: &[u8]) -> Vec<Vec<u8>> {
+        let trim = |t: &[u8]| -> Vec<u8> {
+            let s = t.iter().position(|&c| c != b' ').unwrap_or(t.len());
+            let e = t.iter().rposition(|&c| c != b' ').map_or(s, |e| e + 1);
+            t[s..e].to_vec()
+        };
+        let trimmed = trim(text);
+        let w = |t: &[u8]| self.gold_measure(1, 1, t).0;
+        if w(&trimmed) <= PLATE_ROOM {
+            return vec![trimmed];
+        }
+        // Fitting first, then at a space, then the most even; ties keep the
+        // first split.
+        let mut best: Option<((bool, bool, i32), Vec<u8>, Vec<u8>)> = None;
+        for i in 1..trimmed.len() {
+            let space = trimmed[i] == b' ';
+            let (a, b) = (trim(&trimmed[..i]), trim(&trimmed[i..]));
+            if a.is_empty() || b.is_empty() {
+                continue;
             }
-            while text.len() > 1 && self.gold_measure(1, 1, &text).0 > ROOM {
-                text.pop();
+            let widest = w(&a).max(w(&b));
+            let fits = widest <= PLATE_ROOM;
+            let key = (fits, fits && space, -widest);
+            if best.as_ref().is_none_or(|(k, ..)| key > *k) {
+                best = Some((key, a, b));
             }
         }
-        let (_, lh) = self.gold_measure(1, 1, &text);
-        let cy = y + (plate.height() - lh).max(0) / 2;
-        self.gold_string(x + plate.width() / 2, cy, 1, 3, &text);
+        let cut = |mut line: Vec<u8>| {
+            while line.len() > 1 && w(&line) > PLATE_ROOM {
+                line.pop();
+            }
+            line
+        };
+        match best {
+            Some(((true, ..), a, b)) => vec![a, b],
+            // Nothing fits on two lines: a name of words keeps its first
+            // (a character's, "PEGASUS CRAWFORD"), else the even halves cut.
+            _ if trimmed.contains(&b' ') => {
+                vec![cut(trimmed.split(|&c| c == b' ').find(|w| !w.is_empty()).unwrap_or_default().to_vec())]
+            }
+            Some((_, a, b)) => vec![cut(a), cut(b)],
+            None => vec![cut(trimmed)],
+        }
     }
 
     fn gold_string(&mut self, x: i32, y: i32, size: usize, flags: u32, text: &[u8]) {
@@ -2944,6 +2994,10 @@ impl Builder<'_> {
 }
 
 /// 0x1B8240: gold-font glyph of a character.
+/// The room for an online name on a PLAYER / ENEMY plate (a port
+/// addition): the stats beside the portrait leave about 64 pixels.
+const PLATE_ROOM: i32 = 64;
+
 fn gold_glyph(ch: u8) -> Option<usize> {
     match ch {
         b'A'..=b'Z' => Some(usize::from(ch - b'A')),
@@ -3841,6 +3895,101 @@ mod tests {
         st.sides[0].cursor = [3, 6];
         st.sides[1].controller = 100;
         st
+    }
+
+    /// [`tables`] with the import's sizes for the online name plates
+    /// (measured on SLES_515.79: PLAYER / ENEMY plates 185..188 and the
+    /// graveyard tabs 0xB9..0xBC 48 x 20, gold font size 1 cell 9 x 12,
+    /// glyphs 12 high, 8 wide but I 6, W and M 9, 1 5). Size-1 glyph g sits
+    /// at u 300 + g, so its primitives can be told apart.
+    fn plate_tables() -> HudTables {
+        let mut t = indexed_tables();
+        for s in (185..=188).chain(0xB9..=0xBC) {
+            t.sprites[s].v1 = 20;
+            t.sprites[s].u1 = t.sprites[s].u0 + 48;
+        }
+        t.font_sizes[1] = (9, 12);
+        let widths = [8, 8, 8, 8, 8, 8, 8, 8, 6, 8, 8, 8, 9, 8, 8, 8, 8, 8, 8, 8, 8, 8, 9, 8, 8, 8, 8, 5, 8, 8, 8, 8, 8, 8, 8, 8, 8];
+        for (g, w) in widths.into_iter().enumerate() {
+            t.glyphs[37 + g] = Descriptor { slot: 6, u0: 300 + g as u16, v0: 0, u1: 300 + g as u16 + w, v1: 12 };
+        }
+        t
+    }
+
+    fn plate_lines_of(t: &HudTables, name: &str) -> Vec<String> {
+        let st = HudState::default();
+        let b = Builder {
+            t,
+            st: &st,
+            prims: Vec::new(),
+            unsupported: Vec::new(),
+            element: Element::TerrainPicture,
+            z: HUD_Z,
+            gradient_blend: None,
+            gold_rgba: GREY,
+        };
+        b.plate_lines(name.as_bytes()).into_iter().map(|l| String::from_utf8(l).unwrap()).collect()
+    }
+
+    /// Issue 13: a 12-letter online name was cut to 8 letters ("CHRISTOP").
+    /// Every account name (12 letters at most) now fits whole, on two lines
+    /// when one is too wide.
+    #[test]
+    fn online_names_on_the_plates_fit_whole_on_two_lines() {
+        let t = plate_tables();
+        assert_eq!(plate_lines_of(&t, "YUGI"), ["YUGI"]);
+        assert_eq!(plate_lines_of(&t, "KAIBA123"), ["KAIBA123"]);
+        assert_eq!(plate_lines_of(&t, "CHRISTOPHER1"), ["CHRIST", "OPHER1"]);
+        assert_eq!(plate_lines_of(&t, "WWWWWWWWWWWW"), ["WWWWWW", "WWWWWW"]);
+        assert_eq!(plate_lines_of(&t, "REX RAPTOR"), ["REX", "RAPTOR"]);
+        // Words that fit on no two lines keep the first, as before.
+        assert_eq!(plate_lines_of(&t, "PEGASUS CRAWFORD"), ["PEGASUS"]);
+        assert_eq!(plate_lines_of(&t, ""), [""]);
+    }
+
+    /// The LP panels with online names: each name's every glyph is drawn,
+    /// inside the room beside the portrait and within 2 pixels of the
+    /// plate's 20 rows; without names the original's plate sprites, and
+    /// no name glyph at all.
+    #[cfg(feature = "online")]
+    #[test]
+    fn a_12_letter_name_draws_every_letter_on_the_lp_plate() {
+        let t = plate_tables();
+        let glyphs = |f: &HudFrame| -> Vec<(f32, f32, f32, f32)> {
+            f.prims
+                .iter()
+                .filter(|p| p.kind == PrimKind::TriStrip && p.texture == TextureSource::Atlas(6))
+                .filter(|p| (300.0..340.0).contains(&p.verts[0].u))
+                .map(|p| (p.verts[0].x, p.verts[0].y, p.verts[3].x, p.verts[3].y))
+                .collect()
+        };
+        let plain = frame(&shown(), &t);
+        assert!(glyphs(&plain).is_empty());
+        let plates: Vec<(f32, f32)> =
+            atlas_sprites(&plain).into_iter().filter(|s| (185..=188).contains(&s.0)).map(|s| (s.1, s.2)).collect();
+        assert_eq!(plates.len(), 2, "{:?}", atlas_sprites(&plain));
+        let mut st = shown();
+        st.names = [Some(b"Christopher1".to_vec()), Some(b"Yugi".to_vec())];
+        let named = frame(&st, &t);
+        assert!(atlas_sprites(&named).iter().all(|s| !(185..=188).contains(&s.0)), "names replace the plates");
+        let g = glyphs(&named);
+        assert_eq!(g.len(), 12 + 4, "every letter drawn");
+        for (side, &(px, py)) in plates.iter().enumerate() {
+            let mine: Vec<_> = g.iter().filter(|q| (q.0 - (px + 24.0)).abs() <= 40.0 && (q.1 - py).abs() <= 30.0).collect();
+            assert_eq!(mine.len(), if side == 0 { 12 } else { 4 }, "side {side}: {g:?} plate at {px},{py}");
+            for q in mine {
+                assert!(q.0 >= px + 24.0 - 32.0 && q.2 <= px + 24.0 + 32.0, "inside the room: {q:?}");
+                assert!(q.1 >= py - 2.0 && q.3 <= py + 22.0, "within the plate's rows: {q:?}");
+            }
+        }
+        // Two lines for the long name, one for the short.
+        let rows = |side: usize| {
+            let (px, py) = plates[side];
+            let mut ys: Vec<i32> = g.iter().filter(|q| (q.0 - (px + 24.0)).abs() <= 40.0 && (q.1 - py).abs() <= 30.0).map(|q| q.1 as i32).collect();
+            ys.dedup();
+            ys.len()
+        };
+        assert_eq!((rows(0), rows(1)), (2, 1));
     }
 
     /// The summon preview's CAUTION window (0x1E5540 kind 8 at y -0xC8,

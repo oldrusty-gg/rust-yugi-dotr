@@ -199,6 +199,7 @@ fn step(fx: &mut Fx, l: &L, sp: u32, param: i32) -> i32 {
         if fx.mem.i16(t + 0x36) == 0 {
             continue;
         }
+        crate::guard::check_step("card 56 b018 / 57 b019", fx.mem.read_u32(t + 0x24), &[0x01E0_1F60, 0x01E0_2180, 0x01E0_22E0, 0x01E0_2CF0]);
         match fx.mem.read_u32(t + 0x24) {
             FIRE => run_step(fx, t, 0x20, 0x01E0_30C8, |fx, t| fire(fx, FIRE, t)),
             RIBBON => ribbon_step(fx, t),

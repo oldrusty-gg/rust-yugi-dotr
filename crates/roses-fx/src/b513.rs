@@ -144,6 +144,7 @@ fn step(fx: &mut Fx, sp: u32, param: i32) -> i32 {
         if fx.mem.i16(t + 0x36) == 0 {
             continue;
         }
+        crate::guard::check_step("card 499 b513", fx.mem.read_u32(t + 0x24), &[0x01E0_1C50, 0x01E0_24E0, 0x01E0_25A0]);
         match fx.mem.read_u32(t + 0x24) {
             STREAK_A => run_step(fx, t, 0x50, 0x01E0_281C, |fx, t, sp| streak(fx, t, sp, 0, [0x01E0_18B0, 0x01E0_18EC, 0x01E0_1920, 0x01E0_193C, 0x01E0_19D0, 0x01E0_19D8, 0x01E0_19E4, 0x01E0_19F0])),
             SMOKE => run_step(fx, t, 0x30, 0x01E0_2840, |fx, t, _| smoke(fx, t)),

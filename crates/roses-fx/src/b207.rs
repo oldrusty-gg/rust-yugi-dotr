@@ -112,6 +112,14 @@ fn step(fx: &mut Fx, sp: u32, param: i32) -> i32 {
         if fx.mem.i16(t + 0x36) == 0 {
             continue;
         }
+        crate::guard::check_step(
+            "card 376 b207",
+            fx.mem.read_u32(t + 0x24),
+            &[
+                0x01E0_26A0, 0x01E0_28C0, 0x01E0_30D0, 0x01E0_3210, 0x01E0_3380, 0x01E0_3430, 0x01E0_34E0, 0x01E0_3860,
+                0x01E0_3B20, 0x01E0_3BE0,
+            ],
+        );
         match fx.mem.read_u32(t + 0x24) {
             RISE => run_step(fx, t, 0x30, 0x01E0_3E80, |fx, t, _| flame(fx, t, RISE)),
             GROW => run_step(fx, t, 0x30, 0x01E0_3EA0, |fx, t, _| flame(fx, t, GROW)),

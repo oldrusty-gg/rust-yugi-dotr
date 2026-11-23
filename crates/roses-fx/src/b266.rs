@@ -150,6 +150,7 @@ fn step(fx: &mut Fx, sp: u32) -> i32 {
         if fx.mem.i16(t + 0x36) == 0 {
             continue;
         }
+        crate::guard::check_step("card 142 b266", fx.mem.read_u32(t + 0x24), &[0x01E0_1390, 0x01E0_1A60, 0x01E0_1C40, 0x01E0_1D00]);
         match fx.mem.read_u32(t + 0x24) {
             FAN => fan(fx, t),
             ARC => arc(fx, t),

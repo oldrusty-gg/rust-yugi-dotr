@@ -121,7 +121,7 @@ fn step(fx: &mut Fx, sp: u32, param: i32) -> i32 {
             RING => ring(fx, t),
             LIGHT => light(fx, t),
             MIRROR | WINDOW => flashes += 1,
-            _ => debug_assert!(false, "b504: unported task step {f:#x}"),
+            _ => crate::guard::unported_step("card 624 b504", f),
         }
     }
     for k in 0..TASKS {

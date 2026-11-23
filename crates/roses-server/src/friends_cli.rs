@@ -6,7 +6,7 @@
 //!       [--replay-dir <dir> [--replay-days N]] [--max-matches N] [--max-connections N]
 //!       [--max-connections-per-address N] [--name-filter <file>]
 //!       [--max-spectators N] [--max-spectators-per-match N] [--spectate-delay-turns N]
-//!       [--multi-computer-delay-ms N]
+//!       [--multi-computer-delay-ms N] [--status-file <file> | --no-status-file]
 //!       [--leader-ability ..] [--card-display ..] [--grace-ms ..] [--turn-limit-ms ..] [--timeouts N]
 //!       [--email-log <mail.jsonl> | --email-provider postmark|resend --email-from <"Name <addr>">]
 //!       [--brand <name>] [--require-email] [--email-web <url>]
@@ -15,6 +15,13 @@
 //!   roses-server accounts --db <accounts.db> invite [--uses N] [--days N] [--note <text>]
 //!   roses-server accounts --db <accounts.db> invites | users | matches
 //!   roses-server accounts --db <accounts.db> revoke <code> | disable <name> | enable <name>
+//!   roses-server accounts --db <accounts.db> ban <name> | unban <name>
+//!       (ban = disable: no sign-in, every session ended, and a running hub
+//!       closes the account's connections within ADMIN_EVERY_MS)
+//!   roses-server accounts --db <accounts.db> status | online [--status-file <file>]
+//!       (who is online and which matches run, from the file the hub writes
+//!       every ADMIN_EVERY_MS: hub --status-file <file>, default
+//!       hub-status.json beside the database; --no-status-file: none)
 //!   roses-server accounts --db <accounts.db> reset <name>     (a one-use password-reset code)
 //!   roses-server accounts --db <accounts.db> password <name>  (a temporary password; the player
 //!       logs in with it on the launcher's Profile page and changes it there)
@@ -27,6 +34,9 @@
 //!   roses-server tls self-signed --out <dir> --name <host or IP> [--name ..]
 //!   roses-server tls fingerprint <cert.pem>
 //!   roses-server loadtest --addr <host:port> ... (see roses_server::loadtest)
+//!   roses-server multibench (--duel-import <dir> | --synthetic) [--rooms 1,10,50,100] [--seconds S]
+//!       (N-player computer rooms on one thread, as the hub runs them; see
+//!       roses_server::multibench)
 //!
 //! `--open-signup`: anyone with the game may make an account without an
 //! invite code (at most 5 new accounts an hour per address, 60 an hour in
@@ -86,6 +96,7 @@ pub fn main(first: &str, rest: Vec<String>) -> Option<Result<(), String>> {
         "accounts" => Some(accounts(rest)),
         "tls" => Some(tls(rest)),
         "loadtest" => Some(crate::loadtest::main(rest)),
+        "multibench" => Some(crate::multibench::main(rest)),
         _ => None,
     }
 }
@@ -118,6 +129,12 @@ fn switch(v: &str, on: &str, off: &str) -> Result<[bool; 2], String> {
     }
 }
 
+/// `hub-status.json` beside the accounts database: the hub writes it,
+/// `accounts status` reads it.
+fn default_status_file(db: &std::path::Path) -> PathBuf {
+    db.parent().unwrap_or(std::path::Path::new(".")).join("hub-status.json")
+}
+
 fn hub(args: Vec<String>) -> Result<(), String> {
     let mut args = args.into_iter();
     let mut import: Option<PathBuf> = None;
@@ -129,6 +146,8 @@ fn hub(args: Vec<String>) -> Result<(), String> {
     let mut settings = HubSettings::default();
     let mut computer = false;
     let mut email = crate::hub::email_hub::EmailArgs::default();
+    // None: the default, hub-status.json beside the accounts database.
+    let mut status_file: Option<Option<PathBuf>> = None;
     while let Some(a) = args.next() {
         let mut value = || args.next().ok_or(format!("{a} needs a value"));
         match a.as_str() {
@@ -175,11 +194,14 @@ fn hub(args: Vec<String>) -> Result<(), String> {
             // host / challenger sits at seat 0; MODES rooms' N-player
             // matches use it too (HubSettings::fixed_seed).
             "--match-seed" => settings.fixed_seed = Some(value()?.parse().map_err(|_| "bad --match-seed")?),
+            "--status-file" => status_file = Some(Some(value()?.into())),
+            "--no-status-file" => status_file = Some(None),
             other if email.take(other, &mut value)? => {}
             other => return Err(format!("unknown hub argument {other}")),
         }
     }
     let db = db.ok_or("--db <accounts.db> is required (created when missing)")?;
+    settings.status_file = status_file.unwrap_or_else(|| Some(default_status_file(&db)));
     let data = if synthetic_data {
         HubData::synthetic(computer)
     } else {
@@ -258,7 +280,9 @@ fn accounts(args: Vec<String>) -> Result<(), String> {
     }
     let db = db.ok_or("accounts needs --db <accounts.db> first")?;
     let mut a = Accounts::open(&db)?;
-    let command = args.next().ok_or("accounts: invite, invites, revoke, users, disable, enable, reset, password, matches, backup, delete or prune-matches")?;
+    let command = args
+        .next()
+        .ok_or("accounts: status, online, invite, invites, revoke, users, ban, unban, disable, enable, reset, password, matches, backup, delete or prune-matches")?;
     let rest: Vec<String> = args.collect();
     let arg = |i: usize, what: &str| rest.get(i).cloned().ok_or(format!("{command} needs {what}"));
     match command.as_str() {
@@ -298,10 +322,49 @@ fn accounts(args: Vec<String>) -> Result<(), String> {
                 println!("{}  since {}{}", u.name, utc_stamp(u.created), if u.disabled { "  DISABLED" } else { "" });
             }
         }
-        "disable" | "enable" => {
+        "disable" | "enable" | "ban" | "unban" => {
             let name = arg(0, "a name")?;
-            let found = a.set_disabled(&name, command == "disable")?;
-            println!("{}", if found { format!("{name} {command}d") } else { format!("no account named {name}") });
+            let off = matches!(command.as_str(), "disable" | "ban");
+            let found = a.set_disabled(&name, off)?;
+            let done = if off { "banned (disabled, signed out everywhere)" } else { "unbanned (enabled)" };
+            println!("{}", if found { format!("{name} {done}") } else { format!("no account named {name}") });
+            if found && off {
+                eprintln!(
+                    "a running hub closes their connections within {} seconds; their matches go on as a disconnect",
+                    crate::hub::ADMIN_EVERY_MS / 1000
+                );
+            }
+        }
+        "status" | "online" => {
+            let path = match rest.first().map(String::as_str) {
+                None => default_status_file(&db),
+                Some("--status-file") => PathBuf::from(arg(1, "--status-file <file>")?),
+                Some(o) => return Err(format!("unknown {command} argument {o}")),
+            };
+            let text = std::fs::read_to_string(&path)
+                .map_err(|e| format!("{}: {e} (is the hub running, with this --status-file?)", path.display()))?;
+            let s: crate::hub::HubStatus = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+            let age = crate::accounts::now_seconds() - s.written;
+            println!("{}: written {} UTC ({age} s ago), {} connections", s.server, utc_stamp(s.written), s.connections);
+            if age > 3 * (crate::hub::ADMIN_EVERY_MS / 1000) as i64 {
+                eprintln!("the file is stale: the hub may not be running");
+            }
+            println!("online ({}): {}", s.online.len(), s.online.join(", "));
+            if command == "status" {
+                let running = s.matches.iter().filter(|m| !m.ended).count();
+                println!("matches ({running} running, {} ending):", s.matches.len() - running);
+                for m in &s.matches {
+                    println!(
+                        "  {}  {}  {}  since {}{}{}",
+                        m.id,
+                        m.kind,
+                        m.players.join(" vs "),
+                        utc_stamp(m.started),
+                        if m.spectators > 0 { format!("  {} watching", m.spectators) } else { String::new() },
+                        if m.ended { "  (ended)" } else { "" }
+                    );
+                }
+            }
         }
         "reset" => {
             let code = a.create_reset(&arg(0, "a name")?)?;

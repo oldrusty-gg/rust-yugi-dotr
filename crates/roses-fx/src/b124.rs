@@ -143,7 +143,7 @@ fn step(fx: &mut Fx, sp: u32, param: i32) -> i32 {
             }
             LIGHT => light(fx, t),
             ZOOM | WINDOW => flashes = (flashes + 1) & 0xFFFF,
-            _ => debug_assert!(false, "b124: unported task step {f:#x}"),
+            _ => crate::guard::unported_step("card 275 b124", f),
         }
     }
     let h = fx.target_handle();

@@ -870,6 +870,7 @@ pub fn run(args: impl Iterator<Item = OsString>) -> Result<(), String> {
     app.insert_resource(ClearColor(Color::BLACK))
         .insert_resource(runtime)
         .add_plugins(plugins)
+        .add_plugins(crate::gpu_lost::plugin)
         .add_plugins(MaterialPlugin::<ModelMaterial>::default())
         .add_plugins(MaterialPlugin::<ModelPresentMaterial>::default())
         // The shared capture observer reads cloud materials; none exist here.

@@ -267,6 +267,37 @@ fn client_state_sequences_and_forgets_decided_intentions() {
 }
 
 #[test]
+fn the_client_counts_missed_and_repeated_revisions() {
+    let view = player_view(&duel(), 0);
+    let update = |revision| ServerMessage::Update {
+        revision,
+        actor: Actor::Seat { seat: 1 },
+        cause: Cause::Command,
+        events: vec![],
+        view: view.clone(),
+    };
+    let snapshot = |revision| ServerMessage::Snapshot {
+        snapshot: Snapshot { revision, last_seq: 0, status: MatchStatus::Running, view: view.clone(), presence: vec![false; 2] },
+    };
+    let mut c = ClientState::new();
+    // A first update with no snapshot before it starts at revision 1.
+    c.apply(&update(1));
+    assert_eq!((c.gaps, c.last_gap), (0, None));
+    c.apply(&snapshot(5));
+    c.apply(&update(6));
+    c.apply(&update(7));
+    assert_eq!((c.gaps, c.last_gap), (0, None));
+    c.apply(&update(9));
+    assert_eq!((c.gaps, c.last_gap), (1, Some((7, 9))));
+    c.apply(&update(9));
+    assert_eq!((c.gaps, c.last_gap), (2, Some((9, 9))));
+    // A snapshot (a reconnect) resets the base, not the count.
+    c.apply(&snapshot(20));
+    c.apply(&update(21));
+    assert_eq!((c.gaps, c.revision), (2, 21));
+}
+
+#[test]
 fn the_bot_only_acts_on_its_turn_and_does_not_repeat_refusals() {
     let cards = synthetic::catalogue();
     let d = duel();

@@ -39,6 +39,7 @@ const B552: Family = Family {
     sites: [0x01E0_12CC, 0x01E0_1300, 0x01E0_13C0, 0x01E0_1404, 0x01E0_1450, 0x01E0_1510, 0x01E0_15D0, 0x01E0_1604, 0x01E0_1638],
     returns: [(0x3A, 1), (0xE6, 4), (0xDC, 2)],
     busy: (0x45, 0xD7),
+    unported: ("card 196 b552", &[0x01E0_23A0, 0x01E0_2520, 0x01E0_25E0]),
 };
 
 /// The entry 0x1E02630.

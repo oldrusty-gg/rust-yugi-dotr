@@ -252,7 +252,7 @@ fn step(fx: &mut Fx, sp: u32) -> i32 {
                 frame(fx, low, 0x30, 2, k, 0x01E0_4D50);
             }
             f => {
-                debug_assert!(false, "b709: unported task step {f:#x}");
+                crate::guard::unported_step("card 596 b709", f);
             }
         }
     }

@@ -102,6 +102,11 @@ fn step(fx: &mut Fx, sp: u32) -> i32 {
         if fx.mem.i16(t + 0x36) == 0 {
             continue;
         }
+        crate::guard::check_step(
+            "card 580 b443",
+            fx.mem.read_u32(t + 0x24),
+            &[0x01E0_2940, 0x01E0_2B60, 0x01E0_32E0, 0x01E0_3660, 0x01E0_3B20, 0x01E0_3BD0, 0x01E0_3E80, 0x01E0_3FF0],
+        );
         match fx.mem.read_u32(t + 0x24) {
             RISE => run(fx, t, 0x40, 0x01E0_4360, rise),
             GROW => run(fx, t, 0x30, 0x01E0_4380, grow_flame),

@@ -111,7 +111,7 @@ fn step(fx: &mut Fx, sp: u32, param: i32) -> i32 {
         match f {
             SMOKE => smoke(fx, t),
             CHIP => chip(fx, t),
-            _ => debug_assert!(false, "b294: unspawned step {f:#x}"),
+            _ => crate::guard::unported_step("card 336 b294", f),
         }
     }
     let h = fx.target_handle();

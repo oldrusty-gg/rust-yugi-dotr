@@ -256,7 +256,7 @@ fn step(fx: &mut Fx, r: &Rec, sp: u32, param: i32) -> i32 {
         let f = fx.mem.read_u32(t + 0x24);
         // (frame, ra after the step's jal, the step's slot of the entry's s1).
         let Some(i) = r.at.iter().position(|&a| a == f) else {
-            debug_assert!(false, "b046: unported task step {f:#x}");
+            crate::guard::unported_step("card 230 b046 / 256 b527", f);
             continue;
         };
         let (frame, s1): (u32, Option<u64>) = match i {
@@ -837,7 +837,7 @@ fn step_b484(fx: &mut Fx, sp: u32, param: i32) -> i32 {
                 (0x30, 0x01E0_2718, Some(0))
             }
             _ => {
-                debug_assert!(false, "b484: unported task step {f:#x}");
+                crate::guard::unported_step("card 415 b484", f);
                 continue;
             }
         };
@@ -1111,7 +1111,7 @@ fn step_b477(fx: &mut Fx, sp: u32, param: i32) -> i32 {
                 0x01E0_27B8
             }
             _ => {
-                debug_assert!(false, "b477: unported task step {f:#x}");
+                crate::guard::unported_step("card 431 b477", f);
                 continue;
             }
         };

@@ -191,6 +191,7 @@ fn step(fx: &mut Fx, sp: u32, param: i32, eye: u32) -> i32 {
         if fx.mem.i16(t + 0x36) == 0 {
             continue;
         }
+        crate::guard::check_step("card 7 b081", fx.mem.read_u32(t + 0x24), &[0x01E0_43F0]);
         let f = fx.mem.read_u32(t + 0x24);
         if let Some(&(_, ra)) = STEPS.iter().find(|s| s.0 == f) {
             run_step(fx, f, t, ra, k, eye);

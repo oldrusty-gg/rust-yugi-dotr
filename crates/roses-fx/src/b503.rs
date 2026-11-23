@@ -70,6 +70,9 @@ pub(crate) struct Family {
     /// Returns: (update, code) pairs, then 6 on the range.
     pub returns: [(i32, i32); 3],
     pub busy: (i32, i32),
+    /// The record's name and the steps its entry tests that the port
+    /// leaves out (never spawned; logged if one turns up, [`crate::guard`]).
+    pub unported: (&'static str, &'static [u32]),
 }
 
 const B503: Family = Family {
@@ -94,6 +97,7 @@ const B503: Family = Family {
     sites: [0x01E0_12FC, 0x01E0_1330, 0x01E0_1420, 0x01E0_1464, 0x01E0_14B0, 0x01E0_1570, 0x01E0_1654, 0x01E0_1688, 0x01E0_16BC],
     returns: [(0x3A, 1), (0x12C, 4), (0x122, 2)],
     busy: (0x45, 0x11D),
+    unported: ("card 349 b503", &[]),
 };
 
 /// The entry 0x1E02440.
@@ -147,6 +151,7 @@ fn step(fx: &mut Fx, f: &Family, sp: u32) -> i32 {
         if fx.mem.i16(t + 0x36) == 0 {
             continue;
         }
+        crate::guard::check_step(f.unported.0, fx.mem.read_u32(t + 0x24), f.unported.1);
         for (i, (&s, &ra)) in f.steps.iter().zip(&f.step_ra).enumerate() {
             if fx.mem.read_u32(t + 0x24) == s {
                 match i {

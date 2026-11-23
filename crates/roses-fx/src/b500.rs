@@ -215,7 +215,7 @@ fn step(fx: &mut Fx, sp: u32, param: i32) -> i32 {
                 age(fx, t);
             }
             f => {
-                debug_assert!(false, "b500: unported task step {f:#x}");
+                crate::guard::unported_step("card 417 b500", f);
             }
         }
     }

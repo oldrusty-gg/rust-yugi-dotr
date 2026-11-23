@@ -123,7 +123,7 @@ fn step(fx: &mut Fx, sp: u32, param: i32) -> i32 {
                 spawn::ring_rise(fx, f, t);
             }
             SMOKE => smoke(fx, t, D + 0x40 * k),
-            _ => debug_assert!(false, "unspawned step {f:#x}"),
+            _ => crate::guard::unported_step("card 28 b297", f),
         }
     }
     let h = fx.target_handle();

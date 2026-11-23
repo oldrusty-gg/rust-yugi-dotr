@@ -194,6 +194,7 @@ fn step(fx: &mut Fx, sp: u32, param: i32) -> i32 {
         if fx.mem.i16(t + 0x36) == 0 {
             continue;
         }
+        crate::guard::check_step("card 1 b357", fx.mem.read_u32(t + 0x24), &[0x01E0_2EB0, 0x01E0_40E0, 0x01E0_4190, 0x01E0_52F0]);
         for (at, ra) in RUN {
             if fx.mem.read_u32(t + 0x24) == at {
                 run_step(fx, t, k, at, ra);

@@ -161,6 +161,11 @@ fn step(fx: &mut Fx, sp: u32) -> i32 {
         if fx.mem.i16(t + 0x36) == 0 {
             continue;
         }
+        crate::guard::check_step(
+            "card 111 b134",
+            fx.mem.read_u32(t + 0x24),
+            &[0x01E0_1B90, 0x01E0_1C70, 0x01E0_2140, 0x01E0_21F0, 0x01E0_2300, 0x01E0_2470, 0x01E0_2690, 0x01E0_27F0],
+        );
         // The steps' prologue saves (the entry's s0 = D): 0x20 frames ra +
         // 0x10, s0 = the task; the light's 0x30 ra + 0x20, s1 = D, s0. A
         // ring drawn with texture (5, 0) missing keeps the upper half of

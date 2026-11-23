@@ -112,7 +112,7 @@ fn step(fx: &mut Fx, sp: u32, param: i32) -> i32 {
             SMOKE => smoke(fx, t, &SMOKE_A, 0x01E0_1904),
             DARK => smoke(fx, t, &SMOKE_DARK, 0x01E0_1928),
             GREY => grey(fx, t),
-            _ => debug_assert!(false, "b350: unspawned step {f:#x}"),
+            _ => crate::guard::unported_step("card 121 b350", f),
         }
     }
     let h = fx.target_handle();

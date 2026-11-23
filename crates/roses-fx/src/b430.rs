@@ -186,6 +186,11 @@ fn step(fx: &mut Fx, sp: u32) -> i32 {
         if fx.mem.i16(t + 0x36) == 0 {
             continue;
         }
+        crate::guard::check_step(
+            "card 577 b430",
+            fx.mem.read_u32(t + 0x24),
+            &[0x01E0_1E10, 0x01E0_2230, 0x01E0_2D20, 0x01E0_2EA0, 0x01E0_2F60],
+        );
         let (f, ra, size): (fn(&mut Fx, u32), u32, u32) = match fx.mem.read_u32(t + 0x24) {
             PUFF => (puff, 0x01E0_34C8, 0x20),
             BURST => (burst, 0x01E0_34E8, 0x20),
