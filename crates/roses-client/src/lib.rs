@@ -18,6 +18,7 @@ pub mod game_options;
 pub mod duel_hud;
 pub mod face_anim;
 pub mod gs;
+pub mod local_time;
 pub mod story_motion;
 pub mod memory_card;
 pub mod trade;

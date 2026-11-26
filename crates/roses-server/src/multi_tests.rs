@@ -916,8 +916,79 @@ fn the_away_note_ends_when_the_seat_acts_or_is_knocked_out() {
     view.multi = knocked_out.multi().cloned();
     away.update(Some(0), Some(2), Actor::Server, Cause::Abandoned, &view, None, 40);
     assert!(!away.any());
-    // A 2-seat match pauses instead and is left alone.
+    // A 2-seat match pauses for a drop, but with no clock (issue 6) a turn
+    // the server ends is a silent player's skip: away too. With a clock it
+    // is the clock running out, which is not away.
     view.multi = None;
-    away.update(Some(0), Some(1), Actor::Server, Cause::TurnTimeout, &view, None, 50);
-    assert!(!away.any());
+    let mut two = AwaySeats::default();
+    two.update(Some(0), Some(1), Actor::Server, Cause::TurnTimeout, &view, None, 50);
+    assert!(two.any());
+    two.update(Some(0), Some(1), Actor::Seat { seat: 1 }, Cause::Command, &view, None, 60);
+    assert!(!two.any());
+    let mut clocked = AwaySeats::default();
+    clocked.update(Some(0), Some(0), Actor::Seat { seat: 0 }, Cause::Command, &view, Some(1_000), 0);
+    clocked.update(Some(0), Some(1), Actor::Server, Cause::TurnTimeout, &view, Some(1_000), 1_000);
+    assert!(!clocked.any());
+}
+
+
+// ---- Issue 6: silent players in rooms with no turn clock ------------------
+
+/// The other players end their turns until it is `seat`'s turn again.
+fn others_end_turns(g: &mut MultiMatch, clients: &mut [ClientState], seat: u8, now: u64) {
+    while g.ended().is_none() && g.duel().unwrap().active != seat {
+        let a = g.duel().unwrap().active;
+        let m = clients[usize::from(a)].command(roses_core::duel::DuelCommand::EndTurn);
+        let out = g.handle(a, m, now);
+        take(clients, out);
+    }
+}
+
+#[test]
+fn issue6_a_silent_player_in_a_four_player_room_with_no_clock_is_skipped_then_knocked_out() {
+    use crate::online::{IDLE_STRIKES, IDLE_TURN_MS};
+    let mut g = game(4, settings(RoomMode::FreeForAll), 11);
+    let mut clients = vec![ClientState::new(), ClientState::new(), ClientState::new(), ClientState::new()];
+    for s in 0..4u8 {
+        let (_, out) = g.hello(&yugi_compat(), &Join::Seat { seat: Some(s) }, Some(&deck(usize::from(s))), false, false, 0).unwrap();
+        take(&mut clients, out);
+    }
+    assert!(g.started());
+    let silent = g.duel().unwrap().active;
+    // Any input (here a stale command, refused) starts the time again.
+    let out = g.tick(IDLE_TURN_MS - 1);
+    take(&mut clients, out);
+    let stale = match clients[usize::from(silent)].command(roses_core::duel::DuelCommand::EndTurn) {
+        ClientMessage::Command { seq, command, .. } => ClientMessage::Command { seq, base_revision: 999_999, command },
+        other => other,
+    };
+    let out = g.handle(silent, stale, IDLE_TURN_MS - 1);
+    take(&mut clients, out);
+    let out = g.tick(2 * IDLE_TURN_MS - 2);
+    take(&mut clients, out);
+    assert_eq!((g.duel().unwrap().active, g.strikes(silent)), (silent, 0));
+    let mut now = 2 * IDLE_TURN_MS - 1;
+    for strike in 1..=IDLE_STRIKES {
+        let out = g.tick(now);
+        take(&mut clients, out);
+        assert_ne!(g.duel().unwrap().active, silent, "strike {strike}: the turn was skipped");
+        assert_eq!(g.strikes(silent), strike);
+        let last = &g.replay().entries.last().unwrap();
+        assert_eq!((last.actor, last.cause), (roses_net::Actor::Server, Cause::TurnTimeout), "the others see a server-ended turn: PLAYER AWAY");
+        others_end_turns(&mut g, &mut clients, silent, now);
+        now += IDLE_TURN_MS;
+    }
+    // The fourth silence knocks them out; the other three play on.
+    let out = g.tick(now - 1);
+    take(&mut clients, out);
+    assert!(g.duel().unwrap().alive(silent));
+    let out = g.tick(now);
+    take(&mut clients, out);
+    let duel = g.duel().unwrap();
+    assert!(duel.is_out(silent));
+    assert!(g.ended().is_none(), "three players are left");
+    assert!(g.replay().entries.iter().any(|e| e.cause == Cause::RepeatedTimeouts));
+    assert!((0..4u8).filter(|&s| s != silent).all(|s| g.strikes(s) == 0));
+    let replayed = replay_multi(g.replay(), &synthetic::catalogue(), &RulesTables::empty()).unwrap();
+    assert_eq!(&replayed, g.duel().unwrap());
 }

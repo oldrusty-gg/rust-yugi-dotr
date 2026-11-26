@@ -243,9 +243,9 @@ fn spectating_is_additive_on_the_wire_both_ways() {
     let welcome: LobbyEvent =
         serde_json::from_str(r#"{"type":"lobby_welcome","lobby_version":1,"server":"S","computer":true,"invite_required":false,"choices":true}"#).unwrap();
     assert!(matches!(welcome, LobbyEvent::LobbyWelcome { spectate: false, .. }));
-    let new_welcome = LobbyEvent::LobbyWelcome { lobby_version: 1, server: "S".into(), computer: true, invite_required: false, choices: true, email: false, spectate: true, modes: false };
+    let new_welcome = LobbyEvent::LobbyWelcome { lobby_version: 1, server: "S".into(), computer: true, invite_required: false, choices: true, email: false, spectate: true, modes: false, tournaments: false };
     assert!(serde_json::from_value::<OldLobbyEvent>(to_value(&new_welcome).unwrap()).is_ok());
-    let quiet_welcome = LobbyEvent::LobbyWelcome { lobby_version: 1, server: "S".into(), computer: true, invite_required: false, choices: true, email: false, spectate: false, modes: false };
+    let quiet_welcome = LobbyEvent::LobbyWelcome { lobby_version: 1, server: "S".into(), computer: true, invite_required: false, choices: true, email: false, spectate: false, modes: false, tournaments: false };
     assert!(!serde_json::to_string(&quiet_welcome).unwrap().contains("spectate"));
     // The new requests and events round-trip.
     for r in [LobbyRequest::ListMatches, LobbyRequest::Watch { match_id: "m".into() }, LobbyRequest::AllowSpectators { allow: false }] {

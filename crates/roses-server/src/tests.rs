@@ -1064,3 +1064,84 @@ fn a_flooding_seat_is_cut_off() {
     assert_eq!(a.len(), 64);
     assert_ne!(a, b);
 }
+
+// ---- Issue 6: silent players in matches with no turn clock ----------------
+
+/// An input that changes nothing but counts as the seat being there (a
+/// stale command is refused, the time starts again).
+fn stale_input(h: &mut Harness, seat: u8) -> ClientMessage {
+    match h.clients[usize::from(seat)].command(DuelCommand::EndTurn) {
+        ClientMessage::Command { seq, command, .. } => ClientMessage::Command { seq, base_revision: 999_999, command },
+        other => other,
+    }
+}
+
+#[test]
+fn issue6_a_silent_seat_with_no_clock_loses_three_turns_then_the_match() {
+    use crate::online::{IDLE_STRIKES, IDLE_TURN_MS};
+    let mut h = Harness::started(no_clock(), 31);
+    assert_eq!(h.m.duel().active, 0);
+    // Input just before the limit starts the three minutes again.
+    h.tick(IDLE_TURN_MS - 1);
+    assert!(matches!({ let m = stale_input(&mut h, 0); h.send(0, m) }[0], ServerMessage::Rejected { .. }));
+    h.tick(2 * IDLE_TURN_MS - 2);
+    assert_eq!((h.m.duel().active, h.m.strikes(0)), (0, 0), "not silent for 3 minutes yet");
+    // An open summon is closed and the turn skipped: strike 1.
+    h.command(0, DuelCommand::OpenSummon { cell: GridPos { column: 3, row: 5 } });
+    let mut t = h.now + IDLE_TURN_MS;
+    h.tick(t);
+    assert_eq!((h.m.duel().active, h.m.strikes(0)), (1, 1));
+    let last = h.m.replay().entries.last().unwrap();
+    assert_eq!((last.actor, last.cause), (roses_net::Actor::Server, Cause::TurnTimeout));
+    // Seat 0 plays its next turn: the strike stays (never reset in a match).
+    h.command(1, DuelCommand::EndTurn);
+    assert_eq!(h.m.duel().active, 0);
+    h.command(0, DuelCommand::EndTurn);
+    assert_eq!(h.m.strikes(0), 1);
+    h.command(1, DuelCommand::EndTurn);
+    for strike in 2..=IDLE_STRIKES {
+        t = h.now + IDLE_TURN_MS;
+        h.tick(t);
+        assert_eq!((h.m.duel().active, h.m.strikes(0)), (1, strike));
+        assert!(h.m.ended().is_none());
+        h.command(1, DuelCommand::EndTurn);
+    }
+    // The fourth silence: out, seat 1 wins.
+    h.tick(h.now + IDLE_TURN_MS - 1);
+    assert!(h.m.ended().is_none());
+    h.tick(h.now + 1);
+    let (outcome, cause) = h.m.ended().unwrap();
+    assert_eq!((outcome.winner, cause), (Some(1), Cause::RepeatedTimeouts));
+    assert_eq!(h.m.strikes(1), 0, "the seat that played has no strike");
+    assert_eq!(replay(h.m.replay(), &synthetic::catalogue(), &RulesTables::empty()).unwrap(), *h.m.duel());
+}
+
+#[test]
+fn issue6_with_a_clock_only_the_clock_counts_unless_strikes_are_on() {
+    use crate::online::IDLE_STRIKES;
+    let clock = OnlinePolicy { reconnect_grace: 1_000, turn_limit: Some(100), timeouts_before_forfeit: 9 };
+    // A normal clocked match: the clock skips turns, no strikes.
+    let mut h = Harness::started(clock.clone(), 37);
+    h.tick(100);
+    assert_eq!((h.m.duel().active, h.m.strikes(0)), (1, 0));
+    // A tournament match: a turn the clock ends with no input is a strike,
+    // and after the strikes the next silent turn is out.
+    let mut h = Harness::started(clock, 37);
+    h.m = h.m.clone().with_strikes_on_clock(true);
+    for strike in 1..=IDLE_STRIKES {
+        let t = h.now + 100;
+        h.tick(t);
+        assert_eq!((h.m.duel().active, h.m.strikes(0)), (1, strike));
+        h.command(1, DuelCommand::EndTurn);
+    }
+    // A turn with input that still runs out of time is no strike.
+    let m = stale_input(&mut h, 0);
+    let _ = h.send(0, m);
+    let t = h.now + 100;
+    h.tick(t);
+    assert_eq!((h.m.duel().active, h.m.strikes(0), h.m.ended().is_none()), (1, IDLE_STRIKES, true));
+    h.command(1, DuelCommand::EndTurn);
+    let t = h.now + 100;
+    h.tick(t);
+    assert_eq!(h.m.ended().map(|(o, c)| (o.winner, c)), Some((Some(1), Cause::RepeatedTimeouts)));
+}

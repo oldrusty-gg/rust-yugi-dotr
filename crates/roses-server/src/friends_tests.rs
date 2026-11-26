@@ -937,6 +937,7 @@ fn a_client_that_stops_reading_does_not_hold_up_the_others() {
         client: "test".into(),
         account: true,
         modes: false,
+        tournaments: false,
     };
     let welcome = |hub: &mut Hub, acceptors: &mut Vec<Box<dyn HubAcceptor + Send>>, c: &mut FramedTcp<LobbyRequest, LobbyEvent>| loop {
         hub.step(acceptors, now()).unwrap();
@@ -958,7 +959,7 @@ fn a_client_that_stops_reading_does_not_hold_up_the_others() {
     // and the send queue. Each round the active player's ping is answered
     // promptly; the old blocking send would hold the whole hub up to 10 s.
     let big = LobbyEvent::Players {
-        players: (0..20_000).map(|i| PlayerEntry { name: format!("player{i}"), state: PlayerState::Idle }).collect(),
+        players: (0..20_000).map(|i| PlayerEntry::new(format!("player{i}"), PlayerState::Idle)).collect(),
     };
     let mut worst = Duration::ZERO;
     for _ in 0..40 {

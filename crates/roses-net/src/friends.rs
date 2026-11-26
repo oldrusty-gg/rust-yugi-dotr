@@ -4,7 +4,8 @@
 //! tests share.
 
 use crate::lobby::{
-    ChallengeEnd, LobbyEvent, LobbyRefusal, LobbyRequest, MatchResult, PlayerEntry, LOBBY_VERSION,
+    BracketView, ChallengeEnd, LobbyEvent, LobbyRefusal, LobbyRequest, MatchResult, PlayerEntry, TournamentInfo,
+    TournamentPrompt, LOBBY_VERSION,
 };
 use crate::protocol::{Cause, Compat, MatchOptions};
 use crate::transport::{Connection, Received};
@@ -97,6 +98,25 @@ pub struct LobbyClient {
     pub note: Option<String>,
     /// The last authentication problem (cleared by the next request).
     pub auth_problem: Option<crate::lobby::AuthProblem>,
+    /// The server runs tournaments (a port addition).
+    pub tournaments: bool,
+    /// The tournaments as last listed, and the server's clock then minus
+    /// this computer's (seconds), for start times and countdowns.
+    pub tournament_list: Option<Vec<TournamentInfo>>,
+    pub clock_offset: i64,
+    /// The bracket asked for last (kept up to date by the server).
+    pub bracket: Option<BracketView>,
+    /// This player's ready tournament match.
+    pub prompt: Option<TournamentPrompt>,
+    /// A filled quick tournament asks this player to check in by then.
+    pub check_in: Option<(TournamentInfo, i64)>,
+    /// The tournament this player created last.
+    pub created: Option<u64>,
+}
+
+/// This computer's clock in Unix seconds.
+pub fn unix_now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
 }
 
 impl LobbyClient {
@@ -115,17 +135,24 @@ impl LobbyClient {
     /// no `modes` in the hello).
     #[doc(hidden)]
     pub fn start_older(conn: LobbyConn, compat: Compat, client: &str) -> io::Result<Self> {
-        Self::hello_with(conn, compat, client, false, false)
+        Self::hello_with(conn, compat, client, false, false, false)
+    }
+
+    /// Say hello as a client from before tournaments (MODES, no
+    /// `tournaments` in the hello: the released 2026-11-23 game).
+    #[doc(hidden)]
+    pub fn start_before_tournaments(conn: LobbyConn, compat: Compat, client: &str) -> io::Result<Self> {
+        Self::hello_with(conn, compat, client, false, true, false)
     }
 
     fn hello(conn: LobbyConn, compat: Compat, client: &str, account: bool) -> io::Result<Self> {
         // A game client plays the N-player modes; the launcher's account
         // page does not ask for them.
-        Self::hello_with(conn, compat, client, account, !account)
+        Self::hello_with(conn, compat, client, account, !account, !account)
     }
 
-    fn hello_with(mut conn: LobbyConn, compat: Compat, client: &str, account: bool, modes: bool) -> io::Result<Self> {
-        conn.send(&LobbyRequest::LobbyHello { lobby_version: LOBBY_VERSION, compat, client: client.into(), account, modes })?;
+    fn hello_with(mut conn: LobbyConn, compat: Compat, client: &str, account: bool, modes: bool, tournaments: bool) -> io::Result<Self> {
+        conn.send(&LobbyRequest::LobbyHello { lobby_version: LOBBY_VERSION, compat, client: client.into(), account, modes, tournaments })?;
         Ok(Self {
             conn: Some(conn),
             server: None,
@@ -151,6 +178,13 @@ impl LobbyClient {
             over: None,
             note: None,
             auth_problem: None,
+            tournaments: false,
+            tournament_list: None,
+            clock_offset: 0,
+            bracket: None,
+            prompt: None,
+            check_in: None,
+            created: None,
         })
     }
 
@@ -214,7 +248,8 @@ impl LobbyClient {
 
     fn apply(&mut self, e: &LobbyEvent) {
         match e {
-            LobbyEvent::LobbyWelcome { server, computer, invite_required, choices, email, spectate, modes, .. } => {
+            LobbyEvent::LobbyWelcome { server, computer, invite_required, choices, email, spectate, modes, tournaments, .. } => {
+                self.tournaments = *tournaments;
                 self.email = *email;
                 self.spectate = *spectate;
                 self.modes = *modes;
@@ -290,6 +325,10 @@ impl LobbyClient {
                 self.outgoing = None;
                 self.incoming.clear();
                 self.over = None;
+                // The tournament match the prompt was for.
+                if self.prompt.as_ref().is_some_and(|p| &p.opponent == opponent) {
+                    self.prompt = None;
+                }
                 self.ready = Some(MatchReady {
                     match_id: match_id.clone(),
                     seat: *seat,
@@ -339,6 +378,35 @@ impl LobbyClient {
             LobbyEvent::AccountStatus { status } => self.account_status = Some(status.clone()),
             LobbyEvent::EmailFailed { problem } => self.note = Some(problem.to_string()),
             LobbyEvent::EmailCodeSent | LobbyEvent::ResetCodeSent | LobbyEvent::PasswordReset => {}
+            LobbyEvent::Tournaments { now, tournaments } => {
+                self.clock_offset = now - unix_now();
+                self.tournament_list = Some(tournaments.clone());
+                // A prompt for a tournament that is over is stale.
+                let live = |id: u64| {
+                    tournaments.iter().any(|t| {
+                        t.id == id && !matches!(t.state, crate::lobby::TournamentState::Finished | crate::lobby::TournamentState::Cancelled)
+                    })
+                };
+                if self.prompt.as_ref().is_some_and(|p| !live(p.tournament)) {
+                    self.prompt = None;
+                }
+                if self.check_in.as_ref().is_some_and(|(t, _)| !live(t.id)) {
+                    self.check_in = None;
+                }
+            }
+            LobbyEvent::TournamentBracket { now, bracket } => {
+                self.clock_offset = now - unix_now();
+                self.bracket = Some(bracket.clone());
+            }
+            LobbyEvent::TournamentMatch { now, prompt } => {
+                self.clock_offset = now - unix_now();
+                self.prompt = Some(prompt.clone());
+            }
+            LobbyEvent::TournamentCheckIn { now, tournament, closes } => {
+                self.clock_offset = now - unix_now();
+                self.check_in = Some((tournament.clone(), *closes));
+            }
+            LobbyEvent::TournamentCreated { id } => self.created = Some(*id),
         }
     }
 }
@@ -386,7 +454,7 @@ mod tests {
         // A sign-up without an invite (open sign-up) and a game hello.
         let req: LobbyRequest = serde_json::from_str(r#"{"type":"sign_up","username":"Yugi","password":"password1"}"#).unwrap();
         assert_eq!(req, LobbyRequest::SignUp { username: "Yugi".into(), password: "password1".into(), invite: String::new() });
-        let hello = LobbyRequest::LobbyHello { lobby_version: 1, compat: Compat::current("x"), client: "g".into(), account: false, modes: false };
+        let hello = LobbyRequest::LobbyHello { lobby_version: 1, compat: Compat::current("x"), client: "g".into(), account: false, modes: false, tournaments: false };
         let text = serde_json::to_string(&hello).unwrap();
         assert!(!text.contains("account"), "the game's hello is unchanged on the wire: {text}");
         assert_eq!(serde_json::from_str::<LobbyRequest>(&text).unwrap(), hello);

@@ -64,7 +64,18 @@ struct Seat {
     decisions: VecDeque<(u64, Decision)>,
     timeouts: u8,
     absent_since: Option<u64>,
+    /// Silent turns skipped so far ([`IDLE_TURN_MS`]); never reset within
+    /// a match.
+    strikes: u8,
 }
+
+/// Issue 6 (no-clock rooms held by a silent player): with no turn clock, a
+/// seat that sends nothing for this long on its own turn has the turn
+/// skipped and gets a strike (ms). Any input from it starts the time again.
+pub const IDLE_TURN_MS: u64 = 180_000;
+/// Strikes a seat may collect in one match; the next silent turn after
+/// them knocks it out (1v1: it loses, cause `RepeatedTimeouts`).
+pub const IDLE_STRIKES: u8 = 3;
 
 /// Where the decks come from.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -100,6 +111,12 @@ pub struct OnlineMatch {
     now: u64,
     turn_clock: u64,
     turn_key: (u8, u8),
+    /// Issue 6: time since the acting seat's last input this turn (paused
+    /// time excluded), whether it sent any, and whether a clocked match
+    /// also counts silent turns the clock ended as strikes (tournaments).
+    idle_clock: u64,
+    input_this_turn: bool,
+    strikes_on_clock: bool,
     /// Spectating: frames not yet released (the delay), the last released
     /// one (a late spectator's snapshot), what the hub sends every
     /// spectator, the delay in turns, turns begun so far, spectators now and
@@ -151,6 +168,7 @@ impl OnlineMatch {
             decisions: VecDeque::new(),
             timeouts: 0,
             absent_since: None,
+            strikes: 0,
         };
         let [t0, t1] = tokens;
         Ok(Self {
@@ -179,6 +197,9 @@ impl OnlineMatch {
             ended: None,
             now: 0,
             turn_clock: 0,
+            idle_clock: 0,
+            input_this_turn: false,
+            strikes_on_clock: false,
             spectator_log: VecDeque::new(),
             spectator_shown: None,
             spectator_out: Vec::new(),
@@ -198,6 +219,20 @@ impl OnlineMatch {
 
     pub fn spectator_delay(&self) -> u8 {
         self.spectator_delay
+    }
+
+    /// Tournaments: a turn the clock ends with no input at all from the
+    /// acting seat is a strike as well ([`IDLE_STRIKES`]), so a silent
+    /// player is out after the same number of silent turns as in a room
+    /// with no clock.
+    pub fn with_strikes_on_clock(mut self, on: bool) -> Self {
+        self.strikes_on_clock = on;
+        self
+    }
+
+    /// The seat's silent-turn strikes so far (issue 6).
+    pub fn strikes(&self, seat: u8) -> u8 {
+        self.seats[usize::from(seat & 1)].strikes
     }
 
     /// The spectators' snapshot (the last released frame, the view of
@@ -500,6 +535,7 @@ impl OnlineMatch {
             }
             self.started = true;
             self.turn_clock = 0;
+            self.idle_clock = 0;
             self.start_spectator_log();
             for s in 0..2 {
                 out.push((s, ServerMessage::Snapshot { snapshot: self.snapshot(s) }));
@@ -591,22 +627,58 @@ impl OnlineMatch {
             return out; // paused: the turn clock stops
         }
         self.turn_clock += dt;
-        if let Some(limit) = self.policy.turn_limit {
-            if self.turn_clock >= limit {
-                self.turn_timeout(&mut out);
+        match self.policy.turn_limit {
+            Some(limit) => {
+                if self.turn_clock >= limit {
+                    self.turn_timeout(&mut out);
+                }
+            }
+            // Issue 6: no clock, but a silent turn is skipped.
+            None => {
+                self.idle_clock += dt;
+                if self.idle_clock >= IDLE_TURN_MS {
+                    self.idle_timeout(&mut out);
+                }
             }
         }
         out
     }
 
-    fn turn_timeout(&mut self, out: &mut Outbox) {
+    /// Issue 6: the acting seat sent nothing for [`IDLE_TURN_MS`]: its turn
+    /// is skipped with a strike, or after [`IDLE_STRIKES`] it is out.
+    fn idle_timeout(&mut self, out: &mut Outbox) {
         let seat = self.duel.active;
         let st = &mut self.seats[usize::from(seat)];
+        if st.strikes >= IDLE_STRIKES {
+            self.forfeit(seat, Actor::Server, Cause::RepeatedTimeouts, out);
+            return;
+        }
+        st.strikes += 1;
+        self.skip_turn(seat, out);
+        self.idle_clock = 0;
+    }
+
+    fn turn_timeout(&mut self, out: &mut Outbox) {
+        let seat = self.duel.active;
+        let silent = self.strikes_on_clock && !self.input_this_turn;
+        let st = &mut self.seats[usize::from(seat)];
+        if silent {
+            if st.strikes >= IDLE_STRIKES {
+                self.forfeit(seat, Actor::Server, Cause::RepeatedTimeouts, out);
+                return;
+            }
+            st.strikes += 1;
+        }
         st.timeouts += 1;
         if st.timeouts >= self.policy.timeouts_before_forfeit {
             self.forfeit(seat, Actor::Server, Cause::RepeatedTimeouts, out);
             return;
         }
+        self.skip_turn(seat, out);
+    }
+
+    /// The server ends `seat`'s turn (a timeout's cause).
+    fn skip_turn(&mut self, seat: u8, out: &mut Outbox) {
         // Close what is open (Circle), then end the turn.
         let mut steps = Vec::new();
         if self.duel.pending.is_some() {
@@ -663,6 +735,8 @@ impl OnlineMatch {
         if key != self.turn_key {
             self.turn_key = key;
             self.turn_clock = 0;
+            self.idle_clock = 0;
+            self.input_this_turn = false;
             self.turns += 1;
         }
         // The spectators' frame: filtered once, whoever watches.
@@ -763,6 +837,13 @@ impl OnlineMatch {
     /// One message from an attached seat.
     pub fn handle(&mut self, seat: u8, message: ClientMessage, now: u64) -> Outbox {
         let mut out = self.advance(now);
+        // Issue 6: any input of the acting seat starts its silence anew.
+        if seat == self.duel.active
+            && matches!(message, ClientMessage::Command { .. } | ClientMessage::Forfeit { .. } | ClientMessage::Presence { .. })
+        {
+            self.idle_clock = 0;
+            self.input_this_turn = true;
+        }
         let (seq, command) = match message {
             ClientMessage::Hello { .. } => {
                 out.push((

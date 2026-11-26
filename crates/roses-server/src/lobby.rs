@@ -120,6 +120,8 @@ pub struct Lobby {
     next_id: u64,
     /// Whether [`LobbyRequest::PlayComputer`] is offered.
     pub computer: bool,
+    /// Tournament badges by name key: (tournaments won, quick ones won).
+    titles: BTreeMap<String, (u16, u16)>,
 }
 
 impl Lobby {
@@ -152,13 +154,12 @@ impl Lobby {
 
     /// Everyone online, as the list event.
     pub fn list(&self) -> LobbyEvent {
-        let mut players: Vec<PlayerEntry> =
-            self.players.values().map(|p| PlayerEntry { name: p.name.clone(), state: Self::state(p) }).collect();
-        players.extend(
-            self.away_in_match
-                .values()
-                .map(|name| PlayerEntry { name: name.clone(), state: PlayerState::InMatch }),
-        );
+        let entry = |name: &str, state: PlayerState| {
+            let (titles, quick_titles) = self.titles.get(&username_key(name)).copied().unwrap_or_default();
+            PlayerEntry { name: name.to_string(), state, titles, quick_titles }
+        };
+        let mut players: Vec<PlayerEntry> = self.players.values().map(|p| entry(&p.name, Self::state(p))).collect();
+        players.extend(self.away_in_match.values().map(|name| entry(name, PlayerState::InMatch)));
         players.sort_by_key(|p| username_key(&p.name));
         LobbyEvent::Players { players }
     }
@@ -201,6 +202,19 @@ impl Lobby {
         out.push(Action::Send(conn, self.list()));
         self.broadcast(&mut out);
         out
+    }
+
+    /// A player's tournament badges changed (or are known now): the next
+    /// list shows them.
+    pub fn set_titles(&mut self, name: &str, titles: (u16, u16)) -> Vec<Action> {
+        let key = username_key(name);
+        let old = self.titles.get(&key).copied().unwrap_or_default();
+        if titles == (0, 0) {
+            self.titles.remove(&key);
+        } else {
+            self.titles.insert(key, titles);
+        }
+        if old == titles { Vec::new() } else { vec![Action::Players] }
     }
 
     /// A player's lobby connection is gone (log-out, disconnect): their
@@ -554,7 +568,16 @@ impl Lobby {
             // Spectating is the hub's (it knows the matches).
             | LobbyRequest::ListMatches
             | LobbyRequest::Watch { .. }
-            | LobbyRequest::AllowSpectators { .. } => {}
+            | LobbyRequest::AllowSpectators { .. }
+            // Tournaments are the hub's (crate::hub::tournament_hub).
+            | LobbyRequest::ListTournaments
+            | LobbyRequest::TournamentBracket { .. }
+            | LobbyRequest::CreateTournament { .. }
+            | LobbyRequest::CancelTournament { .. }
+            | LobbyRequest::JoinTournament { .. }
+            | LobbyRequest::LeaveTournament { .. }
+            | LobbyRequest::CheckIn { .. }
+            | LobbyRequest::TournamentReady { .. } => {}
             // N-player rooms (MODES, a port addition).
             LobbyRequest::CreateModeRoom { .. }
             | LobbyRequest::JoinModeRoom { .. }

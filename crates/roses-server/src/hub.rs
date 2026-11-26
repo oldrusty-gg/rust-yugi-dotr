@@ -81,6 +81,9 @@ use std::time::{Duration, Instant};
 // a child module so it can use the hub's private state.
 #[path = "email_hub.rs"]
 pub mod email_hub;
+// Tournaments (a port addition): the scheduler and requests.
+#[path = "tournament_hub.rs"]
+pub mod tournament_hub;
 
 pub type HubConn = Box<dyn Connection<ServerFrame, ClientFrame> + Send>;
 
@@ -280,6 +283,14 @@ pub struct HubSettings {
     /// status`): every [`ADMIN_EVERY_MS`] the hub writes who is online and
     /// which matches run to this file (none: not written).
     pub status_file: Option<PathBuf>,
+    /// Tournaments (a port addition): Unix seconds now (tests set their own
+    /// clock), the weekly tournament's schedule (none: no weekly one), the
+    /// always-open quick tournament, and the bracket file for a web page
+    /// (none: not written).
+    pub wall_clock: fn() -> i64,
+    pub weekly: Option<tournament_hub::WeeklySchedule>,
+    pub quick_tournaments: bool,
+    pub tournaments_file: Option<PathBuf>,
 }
 
 /// How often the hub writes [`HubSettings::status_file`] and closes the
@@ -334,6 +345,10 @@ impl Default for HubSettings {
             multi_computer_delay_ms: 350,
             fixed_seed: None,
             status_file: None,
+            wall_clock: accounts::now_seconds,
+            weekly: Some(tournament_hub::WeeklySchedule::default()),
+            quick_tournaments: true,
+            tournaments_file: None,
         }
     }
 }
@@ -650,6 +665,8 @@ pub struct Hub {
     admin_at: Option<u64>,
     /// Writing the status file failed (logged once until it works again).
     status_failed: bool,
+    /// Tournaments (a port addition).
+    tourn: tournament_hub::TournamentRuntime,
 }
 
 impl Hub {
@@ -716,6 +733,7 @@ impl Hub {
             email: None,
             admin_at: None,
             status_failed: false,
+            tourn: Default::default(),
         }
     }
 
@@ -841,6 +859,7 @@ impl Hub {
         busy |= self.tick_multis(now);
         let actions = self.lobby.tick(now);
         self.act(actions, now);
+        self.tournament_pass(now);
         self.send_players(now);
         if self.admin_at.is_none_or(|t| now.saturating_sub(t) >= ADMIN_EVERY_MS) {
             self.admin_at = Some(now);
@@ -1047,6 +1066,7 @@ impl Hub {
                 self.status_failed = false;
             }
         }
+        self.write_tournaments_file();
     }
 
     /// Who is online and which matches run ([`HubSettings::status_file`]).
@@ -1095,6 +1115,7 @@ impl Hub {
         let Some(mut c) = self.conns.remove(&id) else { return };
         c.conn.close();
         self.modes_conns.remove(&id);
+        self.tournament_conn_gone(id);
         match c.role {
             Role::MultiSeat { match_id, seat } => {
                 if let Some(h) = self.multis.get_mut(&match_id) {
@@ -1166,7 +1187,7 @@ impl Hub {
             (Role::Pending, ClientFrame::Match(ClientMessage::Hello { compat, join, deck, presence, spectate })) => {
                 self.seat_hello(id, compat, join, deck, presence, spectate, now)
             }
-            (Role::Pending, ClientFrame::Lobby(LobbyRequest::LobbyHello { lobby_version, compat, client, account, modes })) => {
+            (Role::Pending, ClientFrame::Lobby(LobbyRequest::LobbyHello { lobby_version, compat, client, account, modes, tournaments })) => {
                 let refusal = if lobby_version != LOBBY_VERSION {
                     Some(LobbyRefusal::LobbyVersion { client: lobby_version, server: LOBBY_VERSION })
                 } else if account {
@@ -1193,6 +1214,9 @@ impl Hub {
                 if modes && !account {
                     self.modes_conns.insert(id);
                 }
+                if tournaments && !account {
+                    self.tournament_hello(id);
+                }
                 let welcome = LobbyEvent::LobbyWelcome {
                     lobby_version: LOBBY_VERSION,
                     server: self.settings.name.clone(),
@@ -1202,6 +1226,7 @@ impl Hub {
                     email: self.email.is_some(),
                     spectate: self.settings.max_spectators > 0 && self.settings.max_spectators_per_match > 0,
                     modes: true,
+                    tournaments: true,
                 };
                 self.lobby_send(id, welcome, now);
             }
@@ -1609,6 +1634,7 @@ impl Hub {
         let Some(h) = self.matches.get_mut(mid) else { return };
         h.ended_at = Some(now);
         let players = h.players.clone();
+        let joined = [h.game.joined(0), h.game.joined(1)];
         if let Some((outcome, cause)) = end {
             let row = MatchRow {
                 id: mid.to_string(),
@@ -1658,6 +1684,9 @@ impl Hub {
         let names: Vec<&str> = players.iter().filter(|n| *n != COMPUTER_NAME).map(String::as_str).collect();
         let actions = self.lobby.ended(&names);
         self.act(actions, now);
+        // A tournament match: its bracket learns the result.
+        let winner = end.map(|(o, _)| o.winner.map(|w| w & 1));
+        self.tournament_match_over(mid, &players, winner, joined, now);
     }
 
     fn remove_match(&mut self, mid: &str, now: u64) {
@@ -1737,7 +1766,10 @@ impl Hub {
 
     /// Start a match between two players (`b` = None: the computer) on
     /// `map` (none: the setup's board), the computer with `computer`'s deck;
-    /// `listed`: spectators may find and watch it (not a private room's).
+    /// `listed`: spectators may find and watch it (not a private room's);
+    /// `tournament`: a tournament match (the turn clock always on, silent
+    /// turns counted as strikes). Returns the match id.
+    #[allow(clippy::too_many_arguments)]
     fn create_match(
         &mut self,
         a: String,
@@ -1745,8 +1777,9 @@ impl Hub {
         map: Option<MapChoice>,
         computer: Option<ComputerDeck>,
         listed: bool,
+        tournament: bool,
         now: u64,
-    ) {
+    ) -> Option<String> {
         let humans: Vec<String> = [Some(a.clone()), b.clone()].into_iter().flatten().collect();
         if self.match_count() >= self.settings.max_matches {
             for name in &humans {
@@ -1754,7 +1787,7 @@ impl Hub {
                     self.lobby_send(cid, LobbyEvent::Problem { problem: LobbyProblem::ServerBusy }, now);
                 }
             }
-            return;
+            return None;
         }
         let mut players = [a, b.clone().unwrap_or_else(|| COMPUTER_NAME.to_string())];
         if self.settings.fixed_seed.is_none() && crate::random_u64() & 1 == 1 {
@@ -1781,15 +1814,13 @@ impl Hub {
             _ => self.data.computer_deck.clone().map(|d| (None, d)),
         };
         let titles = players.clone().map(|p| if p == COMPUTER_NAME { computer.as_ref().and_then(|c| c.0.clone()) } else { None });
-        let game = OnlineMatch::with_submitted_decks(
-            mid.clone(),
-            setup,
-            self.data.cards.clone(),
-            self.settings.policy.clone(),
-            tokens.clone(),
-        )
-        .and_then(|g| g.with_rules(self.data.tables.clone(), self.settings.options))
-        .map(|g| g.with_spectator_delay(self.settings.spectate_delay_turns));
+        let mut policy = self.settings.policy.clone();
+        if tournament {
+            policy.turn_limit = Some(policy.turn_limit.unwrap_or(tournament_hub::TOURNAMENT_TURN_MS));
+        }
+        let game = OnlineMatch::with_submitted_decks(mid.clone(), setup, self.data.cards.clone(), policy, tokens.clone())
+            .and_then(|g| g.with_rules(self.data.tables.clone(), self.settings.options))
+            .map(|g| g.with_spectator_delay(self.settings.spectate_delay_turns).with_strikes_on_clock(tournament));
         let game = match game {
             Ok(g) => g,
             Err(e) => {
@@ -1799,7 +1830,7 @@ impl Hub {
                         self.lobby_send(cid, LobbyEvent::Problem { problem: LobbyProblem::ServerBusy }, now);
                     }
                 }
-                return;
+                return None;
             }
         };
         for (s, t) in tickets.iter().enumerate() {
@@ -1840,6 +1871,7 @@ impl Hub {
                 self.lobby_send(cid, ready, now);
             }
         }
+        Some(mid)
     }
 
     /// The computer opponent: the server's own computer-driven client on
@@ -2088,6 +2120,17 @@ impl Hub {
                 None => self.auth_failed(id, AuthProblem::NotSignedIn, now),
                 Some(u) => self.spectate_request(id, &u, r, now),
             },
+            r @ (LobbyRequest::ListTournaments
+            | LobbyRequest::TournamentBracket { .. }
+            | LobbyRequest::CreateTournament { .. }
+            | LobbyRequest::CancelTournament { .. }
+            | LobbyRequest::JoinTournament { .. }
+            | LobbyRequest::LeaveTournament { .. }
+            | LobbyRequest::CheckIn { .. }
+            | LobbyRequest::TournamentReady { .. }) => match user {
+                None => self.auth_failed(id, AuthProblem::NotSignedIn, now),
+                Some(u) => self.tournament_request(id, &u, r, now),
+            },
             other => match user {
                 None => self.auth_failed(id, AuthProblem::NotSignedIn, now),
                 Some(u) => {
@@ -2238,15 +2281,22 @@ impl Hub {
         if let Some(ready) = live_multi.and_then(|(mid, seat)| self.multi_ready(&mid, seat)) {
             self.lobby_send(id, ready, now);
         }
+        self.tournament_sign_in(&user.name, now);
     }
 
     fn act(&mut self, actions: Vec<Action>, now: u64) {
         for a in actions {
             match a {
                 Action::Send(cid, event) => self.lobby_send(cid, event, now),
-                Action::Pair([a, b], map) => self.create_match(a, Some(b), map, None, true, now),
-                Action::PairPrivate([a, b], map) => self.create_match(a, Some(b), map, None, false, now),
-                Action::PairComputer(a, map, computer) => self.create_match(a, None, map, computer, true, now),
+                Action::Pair([a, b], map) => {
+                    self.create_match(a, Some(b), map, None, true, false, now);
+                }
+                Action::PairPrivate([a, b], map) => {
+                    self.create_match(a, Some(b), map, None, false, false, now);
+                }
+                Action::PairComputer(a, map, computer) => {
+                    self.create_match(a, None, map, computer, true, false, now);
+                }
                 Action::StartMulti(players, settings) => self.create_multi(players, settings, now),
                 Action::Players => self.players_dirty = true,
             }

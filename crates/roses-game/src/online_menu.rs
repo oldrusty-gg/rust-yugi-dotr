@@ -28,13 +28,25 @@
 //! a spectator, sees no hand and no face-down card, and Start brings it
 //! back here); ALLOW WATCHING (kept in `online-watching.json` beside the
 //! session, on by default) lets others watch this player's duels or not.
+//! With a server that runs tournaments (`LobbyClient::tournaments`, a port
+//! addition), TOURNAMENTS lists them (`Screen::Tournaments`: the quick
+//! tournament on top, then the scheduled ones with their start in the
+//! player's local time), each with JOIN / LEAVE / CHECK IN and its bracket
+//! (`Screen::Bracket`, a preview with its banner before the draw), a
+//! create form (`Screen::TournamentCreate`), and the prompts the server
+//! sends: a match ready (`Screen::TournamentReady`: READY, after the deck
+//! choice, then the ordinary duel) and a filled quick tournament's
+//! check-in (`Screen::QuickCheckIn`). Badges show after names: `[n]`
+//! tournaments won, `(qn)` quick ones.
 //! `online_screen` draws [`OnlineMenu::view`] with the game's own
 //! menu pieces; `online_render` (the game binary) runs it once per update.
 
 use roses_net::friends::{self, LobbyClient, LobbyConn, MatchReady, MultiMatchReady, OnlineConfig, SavedSession, WatchReady};
 use roses_net::lobby::{
-    check_password, check_username, normalize_code, ComputerDeck, LiveMatch, LobbyEvent, LobbyRequest, MapChoice, MatchResult,
-    PlayerState, RoomInfo, RoomMode, RoomSettings, ROOM_CODE_LEN, ROOM_LP_CHOICES, ROOM_TURN_CHOICES,
+    check_password, check_tournament_name, check_username, normalize_code, BracketSide, BracketView, ComputerDeck, EntryStatus,
+    GameState, LiveMatch, LobbyEvent, LobbyRequest, MapChoice, MatchResult, PlayerEntry, PlayerState, RoomInfo, RoomMode,
+    RoomSettings, TournamentInfo, TournamentState, WinHow, CHECK_IN_OPENS_SECS, DRAW_SECS, PREVIEW_BANNER, ROOM_CODE_LEN,
+    ROOM_LP_CHOICES, ROOM_TURN_CHOICES, TOURNAMENT_NAME_MAX,
 };
 use crate::online_decks::{self, DeckEntry, DeckLibrary, DeckPreview, DeckRef};
 use roses_net::custom_decks::{self, CustomDeck};
@@ -109,6 +121,8 @@ pub enum Field {
     RoomCode,
     /// The name of the custom deck being looked at.
     DeckName,
+    /// TOURNAMENTS: the name of a tournament being made.
+    TournamentName,
 }
 
 /// What the deck chosen in [`Screen::DeckSelect`] is for.
@@ -127,6 +141,8 @@ pub enum Pending {
     JoinModeRoom,
     /// MODES: the board of the room being set up (no deck chosen).
     ModeBoard,
+    /// TOURNAMENTS: say ready for this tournament's match.
+    TournamentReady(u64),
 }
 
 /// A setting of the MODES room setup (changed with Left / Right).
@@ -185,6 +201,18 @@ pub enum Screen {
     ModeRoom,
     /// MODES: type the code of an N-player room.
     ModeRoomCode,
+    /// TOURNAMENTS (a port addition): the list.
+    Tournaments,
+    /// One tournament: join, leave, check in, its bracket.
+    Tournament { id: u64 },
+    /// Its bracket (a preview before the draw).
+    Bracket { id: u64 },
+    /// Make a tournament.
+    TournamentCreate,
+    /// The server's prompt: this player's tournament match is ready.
+    TournamentReady { id: u64 },
+    /// A filled quick tournament: check in.
+    QuickCheckIn { id: u64 },
 }
 
 /// What the menu asks the game for.
@@ -348,6 +376,22 @@ enum Action {
     Seat(u8),
     ModeStart,
     ModeLeave,
+    /// TOURNAMENTS: the list, one tournament, its actions.
+    Tournaments,
+    OpenTournament(u64),
+    JoinTournament,
+    LeaveTournament,
+    CheckIn,
+    ViewBracket,
+    CancelTournament,
+    NewTournament,
+    /// The create form's start time and cap (Cross steps them; Left / Right too).
+    CreateStart,
+    CreateCap,
+    CreateSubmit,
+    /// The match prompt: READY (after the deck) / LATER.
+    Ready,
+    Later,
 }
 
 pub struct OnlineMenu {
@@ -403,6 +447,60 @@ pub struct OnlineMenu {
     pub multi_active: Option<MultiMatchReady>,
     /// MODES: the seats' names of the N-player match being watched.
     pub watch_seats: Option<Vec<String>>,
+    /// TOURNAMENTS: the create form (name, start in Unix seconds, cap).
+    pub tournament_name: String,
+    pub create_start: i64,
+    pub create_cap: u16,
+}
+
+/// The caps the create form steps through.
+pub const CREATE_CAPS: [u16; 6] = [4, 8, 16, 32, 64, 128];
+
+/// A time in the player's own time zone: "Fri 4 Dec 19:00".
+pub fn local_time(unix: i64) -> String {
+    roses_client::local_time::local(unix).short()
+}
+
+/// A local clock time only: "19:00".
+pub fn local_clock(unix: i64) -> String {
+    let c = roses_client::local_time::local(unix);
+    format!("{:02}:{:02}", c.hour, c.minute)
+}
+
+/// A player's name with their badges: `[n]` tournaments won, `(qn)` quick
+/// tournaments won.
+pub fn badged(p: &PlayerEntry) -> String {
+    let mut name = p.name.clone();
+    if p.titles > 0 {
+        name.push_str(&format!(" [{}]", p.titles));
+    }
+    if p.quick_titles > 0 {
+        name.push_str(&format!(" (q{})", p.quick_titles));
+    }
+    name
+}
+
+/// `text` cut into lines of [`LINE_MAX`] at spaces.
+pub fn wrap(text: &str) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for word in text.split(' ') {
+        match lines.last_mut() {
+            Some(l) if l.chars().count() + 1 + word.chars().count() <= LINE_MAX => {
+                l.push(' ');
+                l.push_str(word);
+            }
+            _ => lines.push(cut(word)),
+        }
+    }
+    lines
+}
+
+fn side_name(s: &BracketSide) -> String {
+    match s {
+        BracketSide::Player { name, .. } => name.clone(),
+        BracketSide::Bye => "Bye".into(),
+        BracketSide::Tbd => "?".into(),
+    }
 }
 
 /// "< VALUE >" for a setting row.
@@ -546,6 +644,9 @@ impl OnlineMenu {
             mode_settings: RoomSettings::default(),
             multi_active: None,
             watch_seats: None,
+            tournament_name: String::new(),
+            create_start: 0,
+            create_cap: 16,
         };
         if menu.saved_session().is_some() {
             menu.act(Action::Connect);
@@ -757,6 +858,14 @@ impl OnlineMenu {
                 self.go(Screen::ModeRoomCode);
             }
             Pending::ModeBoard => {}
+            Pending::TournamentReady(id) => {
+                self.sfx.push(SFX_CONFIRM);
+                self.lobby_send(LobbyRequest::TournamentReady { id });
+                if let Some(p) = self.lobby.as_mut().and_then(|l| l.prompt.as_mut()) {
+                    p.you_ready = true;
+                }
+                self.go(Screen::TournamentReady { id });
+            }
         }
     }
 
@@ -851,7 +960,7 @@ impl OnlineMenu {
                     .flat_map(|l| l.players.iter())
                     .filter(|p| p.name != me)
                     .enumerate()
-                    .map(|(i, p)| (Row::Player(p.name.clone(), p.state), Action::Challenge(i)))
+                    .map(|(i, p)| (Row::Player(badged(p), p.state), Action::Challenge(i)))
                     .collect();
                 rows.push(b("CREATE ROOM", Action::CreateRoom));
                 rows.push(b("JOIN ROOM", Action::JoinRoom));
@@ -863,6 +972,9 @@ impl OnlineMenu {
                 }
                 if self.modes() {
                     rows.push(b("MODES", Action::Modes));
+                }
+                if self.tournaments() {
+                    rows.push(b("TOURNAMENTS", Action::Tournaments));
                 }
                 if self.library.is_some() {
                     rows.push(b("DECKS", Action::Decks));
@@ -990,7 +1102,120 @@ impl OnlineMenu {
             Screen::ModeRoomCode => {
                 vec![field(Field::RoomCode, "ROOM CODE", &self.room_code), b("JOIN", Action::ModeJoinCode), b("BACK", Action::Back)]
             }
+            Screen::Tournaments => {
+                let mut rows: Vec<(Row, Action)> = self
+                    .tournament_list()
+                    .iter()
+                    .map(|t| {
+                        let value = if t.quick && t.state == TournamentState::Open {
+                            format!("{}/{} JOINED", t.entrants, t.cap)
+                        } else {
+                            match t.state {
+                                TournamentState::Open | TournamentState::Drawn => local_time(t.starts),
+                                TournamentState::Running => "PLAYING".into(),
+                                TournamentState::Finished => "FINISHED".into(),
+                                TournamentState::Cancelled => "CANCELLED".into(),
+                            }
+                        };
+                        let label = if t.quick { "QUICK TOURNAMENT".to_string() } else { t.name.clone() };
+                        (Row::Choice(label, value), Action::OpenTournament(t.id))
+                    })
+                    .collect();
+                rows.push(b("CREATE TOURNAMENT", Action::NewTournament));
+                rows.push(b("BACK", Action::Back));
+                rows
+            }
+            Screen::Tournament { id } => {
+                let mut rows = Vec::new();
+                if let Some(t) = self.tournament(*id) {
+                    let now = self.server_now();
+                    let entered = matches!(t.you, Some(EntryStatus::SignedUp | EntryStatus::CheckedIn | EntryStatus::InBracket));
+                    if t.you.is_none() && sign_up_open(&t, now) {
+                        rows.push(b("JOIN", Action::JoinTournament));
+                    }
+                    if t.you == Some(EntryStatus::SignedUp) && check_in_open(&t, now) {
+                        rows.push(b("CHECK IN", Action::CheckIn));
+                    }
+                    rows.push(b("BRACKET", Action::ViewBracket));
+                    if entered && matches!(t.state, TournamentState::Open | TournamentState::Drawn | TournamentState::Running) {
+                        rows.push(b("LEAVE", Action::LeaveTournament));
+                    }
+                    let mine = t.creator.is_some() && t.creator == self.lobby.as_ref().and_then(|l| l.user.clone());
+                    if mine && t.state == TournamentState::Open {
+                        rows.push(b("CANCEL TOURNAMENT", Action::CancelTournament));
+                    }
+                }
+                rows.push(b("BACK", Action::Back));
+                rows
+            }
+            Screen::Bracket { .. } => {
+                let mut rows: Vec<(Row, Action)> = Vec::new();
+                if let Some(v) = self.bracket_view() {
+                    for (r, games) in v.rounds.iter().enumerate() {
+                        for g in games {
+                            let label = format!("R{} {} v {}", r + 1, side_name(&g.sides[0]), side_name(&g.sides[1]));
+                            let value = match (g.winner, g.state) {
+                                (Some(w), _) => match g.how {
+                                    Some(WinHow::Bye) => format!("{} (BYE)", side_name(&g.sides[usize::from(w)])),
+                                    Some(WinHow::Played) | None => side_name(&g.sides[usize::from(w)]),
+                                    Some(_) => format!("{} (W/O)", side_name(&g.sides[usize::from(w)])),
+                                },
+                                (None, GameState::Playing) => "PLAYING".into(),
+                                (None, GameState::Ready) => "READY".into(),
+                                (None, _) => String::new(),
+                            };
+                            rows.push((Row::Choice(label, value), Action::Back));
+                        }
+                    }
+                }
+                rows.push(b("BACK", Action::Back));
+                rows
+            }
+            Screen::TournamentCreate => {
+                let cap = format!("< {} >", self.create_cap);
+                vec![
+                    field(Field::TournamentName, "NAME", &self.tournament_name),
+                    (Row::Choice("START".into(), choice(&local_time(self.create_start))), Action::CreateStart),
+                    (Row::Choice("PLAYERS".into(), cap), Action::CreateCap),
+                    b("CREATE", Action::CreateSubmit),
+                    b("BACK", Action::Back),
+                ]
+            }
+            Screen::TournamentReady { .. } => {
+                let ready = self.lobby.as_ref().and_then(|l| l.prompt.as_ref()).is_some_and(|p| p.you_ready);
+                if ready {
+                    vec![b("BACK TO LOBBY", Action::Later)]
+                } else {
+                    vec![b("READY", Action::Ready), b("LATER", Action::Later)]
+                }
+            }
+            Screen::QuickCheckIn { .. } => vec![b("CHECK IN", Action::CheckIn), b("LATER", Action::Later)],
         }
+    }
+
+    /// Whether the server runs tournaments.
+    pub fn tournaments(&self) -> bool {
+        self.lobby.as_ref().is_some_and(|l| l.tournaments)
+    }
+
+    /// The tournaments as listed last.
+    pub fn tournament_list(&self) -> &[TournamentInfo] {
+        self.lobby.as_ref().and_then(|l| l.tournament_list.as_deref()).unwrap_or(&[])
+    }
+
+    pub fn tournament(&self, id: u64) -> Option<TournamentInfo> {
+        self.tournament_list().iter().find(|t| t.id == id).cloned()
+    }
+
+    /// The bracket of the tournament on screen.
+    pub fn bracket_view(&self) -> Option<&BracketView> {
+        let Screen::Bracket { id } = self.screen else { return None };
+        self.lobby.as_ref()?.bracket.as_ref().filter(|b| b.tournament.id == id)
+    }
+
+    /// The server's Unix time now (this computer's, corrected).
+    pub fn server_now(&self) -> i64 {
+        friends::unix_now() + self.lobby.as_ref().map_or(0, |l| l.clock_offset)
     }
 
     /// Whether the server offers the N-player modes (MODES).
@@ -1045,6 +1270,7 @@ impl OnlineMenu {
             Field::Invite => &mut self.invite,
             Field::RoomCode => &mut self.room_code,
             Field::DeckName => &mut self.deck_name,
+            Field::TournamentName => &mut self.tournament_name,
         }
     }
 
@@ -1062,6 +1288,7 @@ impl OnlineMenu {
                 Field::Invite => (9, c.is_ascii_alphanumeric() || c == '-'),
                 Field::RoomCode => (ROOM_CODE_LEN, c.is_ascii_alphanumeric()),
                 Field::DeckName => (custom_decks::NAME_MAX, custom_decks::name_char_ok(c)),
+                Field::TournamentName => (TOURNAMENT_NAME_MAX, c.is_ascii_alphanumeric() || " '-.!&".contains(c)),
             };
             let value = self.field_mut(f);
             if ok && value.chars().count() < max {
@@ -1090,6 +1317,11 @@ impl OnlineMenu {
         }
         if let (Some((_, Action::Seat(seat))), Key::Square) = (rows.get(self.cursor), key) {
             self.toggle_computer(*seat);
+            return;
+        }
+        // TOURNAMENTS: Left / Right change the create form's start and cap.
+        if let (Some((_, a @ (Action::CreateStart | Action::CreateCap))), Key::Left | Key::Right) = (rows.get(self.cursor), key) {
+            self.step_create(*a, if key == Key::Left { -1 } else { 1 });
             return;
         }
         // ALLOW WATCHING: Left / Right turn it on or off.
@@ -1155,6 +1387,7 @@ impl OnlineMenu {
             Screen::Result { .. } => Action::Ok,
             Screen::Starting | Screen::AwaitResult { .. } | Screen::WatchStarting => return,
             Screen::ModeRoom => Action::ModeLeave,
+            Screen::TournamentReady { .. } | Screen::QuickCheckIn { .. } => Action::Later,
             _ => Action::Back,
         };
         self.act(action);
@@ -1246,6 +1479,12 @@ impl OnlineMenu {
                         self.note = None;
                         self.go(Screen::Lobby);
                     }
+                    Screen::Tournaments => {
+                        self.note = None;
+                        self.go(Screen::Lobby);
+                    }
+                    Screen::Tournament { .. } | Screen::TournamentCreate => self.open_tournaments(),
+                    Screen::Bracket { id } => self.go(Screen::Tournament { id }),
                     Screen::DeckSelect { ref then } => match then.clone() {
                         Pending::Accept { id, from } => self.go(Screen::Challenged { id, from }),
                         Pending::Copy => self.go(Screen::Decks),
@@ -1579,6 +1818,82 @@ impl OnlineMenu {
                 }
                 self.go(Screen::ModeSetup { editing: false });
             }
+            Action::Tournaments => {
+                ok(self);
+                self.note = None;
+                self.open_tournaments();
+            }
+            Action::OpenTournament(id) => {
+                ok(self);
+                self.note = None;
+                self.go(Screen::Tournament { id });
+            }
+            Action::JoinTournament | Action::LeaveTournament | Action::CancelTournament => {
+                let Screen::Tournament { id } = self.screen else { return };
+                ok(self);
+                self.note = None;
+                self.lobby_send(match action {
+                    Action::JoinTournament => LobbyRequest::JoinTournament { id },
+                    Action::LeaveTournament => LobbyRequest::LeaveTournament { id },
+                    _ => LobbyRequest::CancelTournament { id },
+                });
+                self.cursor = 0;
+            }
+            Action::CheckIn => {
+                let id = match self.screen {
+                    Screen::Tournament { id } | Screen::QuickCheckIn { id } => id,
+                    _ => return,
+                };
+                ok(self);
+                self.note = None;
+                self.lobby_send(LobbyRequest::CheckIn { id });
+                if let Some(l) = self.lobby.as_mut() {
+                    l.check_in = None;
+                }
+                self.go(Screen::Tournament { id });
+            }
+            Action::ViewBracket => {
+                let Screen::Tournament { id } = self.screen else { return };
+                ok(self);
+                self.lobby_send(LobbyRequest::TournamentBracket { id });
+                self.go(Screen::Bracket { id });
+            }
+            Action::NewTournament => {
+                ok(self);
+                self.note = None;
+                self.tournament_name.clear();
+                // Two hours ahead on the hour (the server wants one at least).
+                let now = self.server_now();
+                self.create_start = (now / 3600 + 3) * 3600;
+                self.go(Screen::TournamentCreate);
+            }
+            Action::CreateStart | Action::CreateCap => self.step_create(action, 1),
+            Action::CreateSubmit => {
+                let name = self.tournament_name.trim().to_string();
+                if !check_tournament_name(&name) {
+                    self.sfx.push(SFX_BUZZER);
+                    self.note = Some("a name of 3-24 letters, digits, spaces".into());
+                    return;
+                }
+                ok(self);
+                self.note = None;
+                let (starts, cap) = (self.create_start, self.create_cap);
+                self.lobby_send(LobbyRequest::CreateTournament { name, starts, cap });
+            }
+            Action::Ready => {
+                let Screen::TournamentReady { id } = self.screen else { return };
+                self.choose_deck_then(Pending::TournamentReady(id));
+            }
+            Action::Later => {
+                self.sfx.push(SFX_CANCEL);
+                self.note = None;
+                if let Screen::QuickCheckIn { .. } = self.screen {
+                    if let Some(l) = self.lobby.as_mut() {
+                        l.check_in = None;
+                    }
+                }
+                self.go(Screen::Lobby);
+            }
             Action::ConfirmDelete => {
                 let Screen::DeleteDeck { index } = self.screen else { return };
                 let removed = self.library.as_mut().and_then(|l| l.custom.delete(index));
@@ -1592,6 +1907,27 @@ impl OnlineMenu {
                 }
                 self.go(Screen::Decks);
             }
+        }
+    }
+
+    fn open_tournaments(&mut self) {
+        self.lobby_send(LobbyRequest::ListTournaments);
+        self.go(Screen::Tournaments);
+    }
+
+    /// The create form's start (an hour a step) or cap.
+    fn step_create(&mut self, row: Action, delta: i32) {
+        self.sfx.push(SFX_CURSOR);
+        match row {
+            Action::CreateStart => {
+                let earliest = (self.server_now() / 3600 + 2) * 3600;
+                self.create_start = (self.create_start + i64::from(delta) * 3600).max(earliest);
+            }
+            Action::CreateCap => {
+                let at = CREATE_CAPS.iter().position(|&c| c == self.create_cap).unwrap_or(2) as i32;
+                self.create_cap = CREATE_CAPS[(at + delta).rem_euclid(CREATE_CAPS.len() as i32) as usize];
+            }
+            _ => {}
         }
     }
 
@@ -2062,6 +2398,37 @@ impl OnlineMenu {
                     self.request = Some(MenuRequest::PlayMulti(ready));
                 }
             }
+            LobbyEvent::TournamentMatch { .. } => {
+                let prompt = self.lobby.as_ref().and_then(|l| l.prompt.clone());
+                let here = matches!(
+                    self.screen,
+                    Screen::Lobby | Screen::Watch | Screen::Tournaments | Screen::Tournament { .. } | Screen::Bracket { .. } | Screen::Result { .. }
+                );
+                if let Some(p) = prompt.filter(|p| !p.you_ready && here) {
+                    self.sfx.push(SFX_CONFIRM);
+                    self.note = None;
+                    self.go(Screen::TournamentReady { id: p.tournament });
+                }
+            }
+            LobbyEvent::TournamentCheckIn { tournament, .. } => {
+                let here = matches!(self.screen, Screen::Lobby | Screen::Watch | Screen::Tournaments | Screen::Tournament { .. } | Screen::Bracket { .. });
+                if here {
+                    self.sfx.push(SFX_CONFIRM);
+                    self.go(Screen::QuickCheckIn { id: tournament.id });
+                }
+            }
+            LobbyEvent::TournamentCreated { id } => {
+                if self.screen == Screen::TournamentCreate {
+                    self.lobby_send(LobbyRequest::ListTournaments);
+                    self.go(Screen::Tournament { id });
+                }
+            }
+            LobbyEvent::Tournaments { .. } => {
+                if matches!(self.screen, Screen::Tournaments | Screen::Tournament { .. }) {
+                    let n = self.rows().len();
+                    self.cursor = self.cursor.min(n.saturating_sub(1));
+                }
+            }
             LobbyEvent::LobbyWelcome { .. } | LobbyEvent::Players { .. } | LobbyEvent::Pong | LobbyEvent::PasswordChanged => {}
             // Email answers go to the launcher's account page, not the game.
             LobbyEvent::AccountStatus { .. }
@@ -2133,6 +2500,41 @@ impl OnlineMenu {
         );
     }
 
+    /// A tournament's lines: its name, start in local time, state, entrants
+    /// and this player's part.
+    fn tournament_lines(&self, t: &TournamentInfo, info: &mut Vec<String>) {
+        info.push(cut(&t.name));
+        let now = self.server_now();
+        if t.quick {
+            info.push(cut(&format!("Quick: {}/{} joined, starts when full.", t.entrants, t.cap)));
+        } else {
+            info.push(cut(&format!("Starts {} (your time)", local_time(t.starts))));
+        }
+        let state = match t.state {
+            TournamentState::Open if check_in_open(t, now) => format!("Check-in open until {}.", local_clock(t.starts - if t.quick { 0 } else { DRAW_SECS })),
+            TournamentState::Open if t.quick => "Sign-up open.".to_string(),
+            TournamentState::Open => format!("Sign-up open. Check-in from {}.", local_clock(t.starts - CHECK_IN_OPENS_SECS)),
+            TournamentState::Drawn => "Drawn: matches begin at the start.".into(),
+            TournamentState::Running => "Playing now.".into(),
+            TournamentState::Finished => t.champion.as_ref().map_or("Finished.".into(), |c| format!("Champion: {c}")),
+            TournamentState::Cancelled => t.note.clone().map_or("Cancelled.".into(), |n| format!("Cancelled: {n}")),
+        };
+        info.push(cut(&state));
+        info.push(cut(&format!("{}/{} signed up, {} checked in", t.entrants, t.cap, t.checked_in)));
+        let you = match t.you {
+            None => "You have not joined.",
+            Some(EntryStatus::SignedUp) => "You are signed up; check in later.",
+            Some(EntryStatus::CheckedIn) => "You are checked in.",
+            Some(EntryStatus::InBracket) => "You are in the bracket.",
+            Some(EntryStatus::Out) => "You are out.",
+            Some(EntryStatus::Champion) => "You are the champion!",
+        };
+        info.push(you.into());
+        if let Some(c) = &t.creator {
+            info.push(cut(&format!("Made by {c}")));
+        }
+    }
+
     pub fn view(&self) -> View {
         let config = self.config.as_ref().ok();
         let label = config.map(|c| c.label()).unwrap_or_default();
@@ -2199,7 +2601,9 @@ impl OnlineMenu {
                 "ACCOUNT"
             }
             Screen::Lobby => {
-                info.push(cut(&format!("{} on {label}", me.clone().unwrap_or_default())));
+                let mine = self.lobby.as_ref().and_then(|l| l.players.iter().find(|p| Some(&p.name) == me.as_ref()).cloned());
+                let shown = mine.as_ref().map_or_else(|| me.clone().unwrap_or_default(), badged);
+                info.push(cut(&format!("{shown} on {label}")));
                 if self.library.is_some() {
                     if let Ok(d) = &self.deck {
                         info.push(cut(&format!("Deck: {}", d.source)));
@@ -2411,6 +2815,86 @@ impl OnlineMenu {
                 info.push("Type the code of the room to join.".into());
                 "JOIN ROOM"
             }
+            Screen::Tournaments => {
+                if let Some(q) = self.tournament_list().iter().find(|t| t.quick && t.state == TournamentState::Open) {
+                    info.push(cut(&format!("Quick tournament: {}/{} joined.", q.entrants, q.cap)));
+                    info.push(if q.starts > 0 { "Full: checking in now.".into() } else { format!("Starts when {} join.", q.cap) });
+                }
+                let rows = self.rows();
+                match rows.get(self.cursor) {
+                    Some((_, Action::OpenTournament(id))) => {
+                        if let Some(t) = self.tournament(*id).filter(|t| !t.quick) {
+                            self.tournament_lines(&t, &mut info);
+                        }
+                    }
+                    _ if self.lobby.as_ref().is_some_and(|l| l.tournament_list.is_none()) => info.push("Asking the server...".into()),
+                    _ => {
+                        info.push("INVENTED: not in the original game.".into());
+                        info.push("Knockout, one duel each, original rules.".into());
+                    }
+                }
+                "TOURNAMENTS"
+            }
+            Screen::Tournament { id } => {
+                match self.tournament(*id) {
+                    Some(t) => self.tournament_lines(&t, &mut info),
+                    None => info.push("That tournament is gone.".into()),
+                }
+                "TOURNAMENT"
+            }
+            Screen::Bracket { .. } => {
+                match self.bracket_view() {
+                    Some(v) => {
+                        info.push(cut(&v.tournament.name));
+                        if v.preview {
+                            info.extend(wrap(PREVIEW_BANNER));
+                        } else {
+                            info.push(format!("{} places, {} rounds.", v.size, v.rounds.len()));
+                            if let Some(c) = &v.tournament.champion {
+                                info.push(cut(&format!("Champion: {c}")));
+                            }
+                            info.push("W/O: walkover. BYE: no opponent.".into());
+                        }
+                    }
+                    None => info.push("Asking the server...".into()),
+                }
+                "BRACKET"
+            }
+            Screen::TournamentCreate => {
+                info.push("Your own tournament: knockout, one".into());
+                info.push("duel each, original rules. Sign-up".into());
+                info.push("opens now; check-in is the hour before".into());
+                info.push("the start, the draw 30 minutes before.".into());
+                info.push("Times are your own time zone.".into());
+                "NEW TOURNAMENT"
+            }
+            Screen::TournamentReady { .. } => {
+                match self.lobby.as_ref().and_then(|l| l.prompt.clone()) {
+                    Some(p) => {
+                        info.push(cut(&p.name));
+                        let round = if p.round == p.rounds { "the final".to_string() } else { format!("round {} of {}", p.round, p.rounds) };
+                        info.push(cut(&format!("Your match is ready: {round}")));
+                        info.push(cut(&format!("Opponent: {}", p.opponent)));
+                        if p.you_ready {
+                            info.push(cut(&format!("Waiting for {}...", p.opponent)));
+                            info.push("The duel starts when you are both free.".into());
+                        } else {
+                            info.push(cut(&format!("Say ready by {} or lose by walkover.", local_clock(p.deadline))));
+                            info.push(if p.opponent_ready { "Your opponent is ready.".into() } else { "Your opponent is not ready yet.".into() });
+                        }
+                    }
+                    None => info.push("Waiting for the server...".into()),
+                }
+                "TOURNAMENT"
+            }
+            Screen::QuickCheckIn { .. } => {
+                info.push("The quick tournament is full!".into());
+                if let Some((_, closes)) = self.lobby.as_ref().and_then(|l| l.check_in.clone()) {
+                    info.push(cut(&format!("Check in by {} (your time).", local_clock(closes))));
+                }
+                info.push("Players who do not are replaced by byes.".into());
+                "TOURNAMENT"
+            }
             Screen::Result { result } if self.multi_active.is_some() => {
                 info.push(
                     match result {
@@ -2459,9 +2943,24 @@ impl OnlineMenu {
     }
 }
 
+/// Sign-up is open now (by the server's clock).
+pub fn sign_up_open(t: &TournamentInfo, now: i64) -> bool {
+    t.state == TournamentState::Open && if t.quick { t.starts == 0 } else { now < t.starts - DRAW_SECS }
+}
+
+/// Check-in is open now (by the server's clock).
+pub fn check_in_open(t: &TournamentInfo, now: i64) -> bool {
+    t.state == TournamentState::Open
+        && if t.quick { t.starts > 0 && now < t.starts } else { now >= t.starts - CHECK_IN_OPENS_SECS && now < t.starts - DRAW_SECS }
+}
+
 #[cfg(test)]
 #[path = "online_menu_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "online_tournament_tests.rs"]
+mod tournament_tests;
 
 #[cfg(test)]
 #[path = "online_modes_tests.rs"]

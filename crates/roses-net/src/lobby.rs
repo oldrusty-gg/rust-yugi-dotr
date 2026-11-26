@@ -130,6 +130,10 @@ pub enum LobbyRequest {
         /// Left out when false, so an older server reads the hello as before.
         #[serde(default, skip_serializing_if = "is_false")]
         modes: bool,
+        /// This client reads the tournament messages (a port addition):
+        /// only then is it sent any of them. Left out when false.
+        #[serde(default, skip_serializing_if = "is_false")]
+        tournaments: bool,
     },
     /// Create an account. With an invite code from the server's owner, or
     /// with an empty `invite` when the server has open sign-up
@@ -218,6 +222,29 @@ pub enum LobbyRequest {
     /// Signed out: a new password with the code from that email
     /// ([`LobbyEvent::PasswordReset`]; every session of the account ends).
     ResetPassword { account: String, code: String, new_password: String },
+    // ---- tournaments (only to a server whose welcome says `tournaments`) --
+    /// The tournaments open, drawn, running and lately finished:
+    /// [`LobbyEvent::Tournaments`].
+    ListTournaments,
+    /// One tournament's bracket (the preview before the draw): answered
+    /// with [`LobbyEvent::TournamentBracket`], and sent again on every
+    /// change until another bracket is asked for.
+    TournamentBracket { id: u64 },
+    /// A tournament of this player's own ([`check_tournament_name`], start
+    /// in Unix seconds, cap [`TOURNAMENT_CAP_MIN`]..=[`TOURNAMENT_CAP_MAX`]).
+    CreateTournament { name: String, starts: i64, cap: u16 },
+    /// The creator calls off their own tournament before its draw.
+    CancelTournament { id: u64 },
+    /// Sign up (open from creation until the draw).
+    JoinTournament { id: u64 },
+    /// Withdraw (before the draw; afterwards the player's next match is lost).
+    LeaveTournament { id: u64 },
+    /// Check in (from [`CHECK_IN_OPENS_SECS`] before the start until the
+    /// draw at [`DRAW_SECS`] before it).
+    CheckIn { id: u64 },
+    /// Ready for the tournament match the server prompted for
+    /// ([`LobbyEvent::TournamentMatch`]).
+    TournamentReady { id: u64 },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -242,6 +269,23 @@ pub enum PlayerState {
 pub struct PlayerEntry {
     pub name: String,
     pub state: PlayerState,
+    /// Tournaments this player has won (their badge; a port addition).
+    /// Left out when 0, and older clients ignore it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub titles: u16,
+    /// Quick tournaments won (a smaller badge: a counter).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub quick_titles: u16,
+}
+
+fn is_zero(n: &u16) -> bool {
+    *n == 0
+}
+
+impl PlayerEntry {
+    pub fn new(name: impl Into<String>, state: PlayerState) -> Self {
+        Self { name: name.into(), state, titles: 0, quick_titles: 0 }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -285,6 +329,21 @@ pub enum LobbyProblem {
     SeatTaken,
     /// MODES: only the room's host may do that.
     NotHost,
+    // ---- tournaments (sent only to clients that read them) ----
+    NoSuchTournament,
+    /// Sign-up or withdrawal is over (the draw is done).
+    TournamentClosed,
+    TournamentFull,
+    /// Not the check-in time.
+    NotCheckInTime,
+    /// Not signed up (or dropped) in that tournament.
+    NotEntered,
+    /// Creating needs one finished online match first.
+    NotEligible,
+    /// One open tournament per creator.
+    AlreadyHosting,
+    /// A name, start time or cap the server does not take.
+    BadTournament,
 }
 
 impl std::fmt::Display for LobbyProblem {
@@ -306,6 +365,14 @@ impl std::fmt::Display for LobbyProblem {
             Self::BadSettings => "the server cannot play those settings",
             Self::SeatTaken => "that seat is taken",
             Self::NotHost => "only the room's host can do that",
+            Self::NoSuchTournament => "that tournament is over or gone",
+            Self::TournamentClosed => "sign-up for that tournament is closed",
+            Self::TournamentFull => "that tournament is full",
+            Self::NotCheckInTime => "check-in is not open now",
+            Self::NotEntered => "you are not in that tournament",
+            Self::NotEligible => "finish one online duel first",
+            Self::AlreadyHosting => "you already have an open tournament",
+            Self::BadTournament => "the server cannot take that tournament",
         })
     }
 }
@@ -488,6 +555,10 @@ pub enum LobbyEvent {
         /// the room requests may be sent. Absent from older servers.
         #[serde(default, skip_serializing_if = "is_false")]
         modes: bool,
+        /// The server runs tournaments (a port addition): the tournament
+        /// requests may be sent. Absent from older servers.
+        #[serde(default, skip_serializing_if = "is_false")]
+        tournaments: bool,
     },
     LobbyRefused { reason: LobbyRefusal },
     SignedIn {
@@ -569,6 +640,191 @@ pub enum LobbyEvent {
     /// The password was reset: log in with the new one.
     PasswordReset,
     EmailFailed { problem: EmailProblem },
+    // ---- tournaments (answers to the tournament requests only) ----------
+    /// The tournaments (`now`: the server's Unix time, so a client with a
+    /// wrong clock still counts down right). Sent again on every change.
+    Tournaments { now: i64, tournaments: Vec<TournamentInfo> },
+    /// The bracket asked for (a preview before the draw).
+    TournamentBracket { now: i64, bracket: BracketView },
+    /// This player's tournament match is ready: say ready within
+    /// [`READY_SECS`] (by `prompt.deadline`). Sent again when either side
+    /// readies; the match itself comes as an ordinary `MatchReady`.
+    TournamentMatch { now: i64, prompt: TournamentPrompt },
+    /// The tournament this player asked for was created.
+    TournamentCreated { id: u64 },
+    /// A quick tournament this player is in has filled: check in by
+    /// `closes` (Unix seconds), or the slot becomes a bye.
+    TournamentCheckIn { now: i64, tournament: TournamentInfo, closes: i64 },
+}
+
+// ---- tournaments (a port addition) -------------------------------------
+
+/// Check-in opens this long before the start (seconds).
+pub const CHECK_IN_OPENS_SECS: i64 = 60 * 60;
+/// The draw is made this long before the start, from the players who have
+/// checked in; check-in and sign-up close then (seconds).
+pub const DRAW_SECS: i64 = 30 * 60;
+/// A player whose match is ready has this long to say ready (seconds).
+pub const READY_SECS: i64 = 10 * 60;
+/// The player caps a creator may choose.
+pub const TOURNAMENT_CAP_MIN: u16 = 4;
+pub const TOURNAMENT_CAP_MAX: u16 = 128;
+/// A tournament's name: this many characters.
+pub const TOURNAMENT_NAME_MIN: usize = 3;
+pub const TOURNAMENT_NAME_MAX: usize = 24;
+/// The quick tournament: this many players, and this long to check in once
+/// it fills (seconds).
+pub const QUICK_PLAYERS: u16 = 4;
+pub const QUICK_CHECK_IN_SECS: i64 = 5 * 60;
+/// The banner over a preview bracket.
+pub const PREVIEW_BANNER: &str =
+    "Preview only. The real fixtures are drawn at random 30 minutes before the start, from players who have checked in.";
+
+/// Whether a tournament name has a usable shape: [`TOURNAMENT_NAME_MIN`]
+/// to [`TOURNAMENT_NAME_MAX`] characters of letters, digits, spaces and
+/// `' - . ! &`, with a letter, and no double or edge spaces (the server
+/// also applies its name filter).
+pub fn check_tournament_name(name: &str) -> bool {
+    let n = name.chars().count();
+    (TOURNAMENT_NAME_MIN..=TOURNAMENT_NAME_MAX).contains(&n)
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || " '-.!&".contains(c))
+        && name.chars().any(|c| c.is_ascii_alphabetic())
+        && !name.starts_with(' ')
+        && !name.ends_with(' ')
+        && !name.contains("  ")
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TournamentState {
+    /// Sign-up open (check-in too in its half hour); the bracket is a preview.
+    Open,
+    /// Drawn: the bracket is final; matches begin at the start time.
+    Drawn,
+    Running,
+    Finished,
+    Cancelled,
+}
+
+/// Where a player stands in a tournament.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntryStatus {
+    SignedUp,
+    CheckedIn,
+    /// In the drawn bracket, still in it.
+    InBracket,
+    /// Knocked out, withdrawn, or dropped at the draw (not checked in).
+    Out,
+    Champion,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TournamentInfo {
+    pub id: u64,
+    pub name: String,
+    /// The player who created it (none: the server's own or an admin's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creator: Option<String>,
+    /// The server's weekly tournament.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub weekly: bool,
+    /// The always-open quick tournament ([`QUICK_PLAYERS`] players, no
+    /// fixed time): `starts` is 0 until it fills, then the end of its
+    /// check-in ([`QUICK_CHECK_IN_SECS`]), when it is drawn and begins.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub quick: bool,
+    /// Unix seconds.
+    pub starts: i64,
+    pub cap: u16,
+    pub state: TournamentState,
+    /// Signed up, and checked in, now.
+    pub entrants: u16,
+    pub checked_in: u16,
+    /// The player who asked (none: not entered, or a list for everyone).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub you: Option<EntryStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub champion: Option<String>,
+    /// Why it was cancelled, if it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// One side of a bracket match.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BracketSide {
+    /// The winner of an earlier match, not known yet.
+    Tbd,
+    /// An empty slot: the other side has a walkover.
+    Bye,
+    /// `seed`: 1 is the top seed (in a preview: the sign-up order).
+    Player { name: String, seed: u16 },
+}
+
+/// How a bracket match was decided.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WinHow {
+    Played,
+    /// The other player did not say ready, or did not join, in time.
+    Walkover,
+    /// No opponent in the bracket.
+    Bye,
+    /// Neither said ready in time: the higher seed went through.
+    NoShow,
+    /// The other player withdrew or was removed.
+    Withdrew,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GameState {
+    /// A side is not known yet (or the tournament has not started).
+    Waiting,
+    /// Both players known: waiting for them to say ready.
+    Ready,
+    Playing,
+    Done,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BracketGame {
+    pub sides: [BracketSide; 2],
+    /// The side that went through.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub winner: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub how: Option<WinHow>,
+    pub state: GameState,
+}
+
+/// A tournament's bracket: rounds from the first to the final.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BracketView {
+    pub tournament: TournamentInfo,
+    /// Before the draw: the players signed up so far, in sign-up order
+    /// (shown with [`PREVIEW_BANNER`]).
+    pub preview: bool,
+    /// Slots in the first round (a power of two, at least 4).
+    pub size: u16,
+    pub rounds: Vec<Vec<BracketGame>>,
+}
+
+/// A ready tournament match of this player.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TournamentPrompt {
+    pub tournament: u64,
+    pub name: String,
+    /// 1-based; `rounds` in all (the last is the final).
+    pub round: u8,
+    pub rounds: u8,
+    pub opponent: String,
+    /// Unix seconds: say ready by then.
+    pub deadline: i64,
+    pub you_ready: bool,
+    pub opponent_ready: bool,
 }
 
 /// What a client may send on a connection of either kind (the server
@@ -637,7 +893,7 @@ mod choice_tests {
         // A new server's events are read by an older client (it ignores the
         // new fields).
         let events = [
-            LobbyEvent::LobbyWelcome { lobby_version: 1, server: "S".into(), computer: true, invite_required: true, choices: true, email: false, spectate: true, modes: false },
+            LobbyEvent::LobbyWelcome { lobby_version: 1, server: "S".into(), computer: true, invite_required: true, choices: true, email: false, spectate: true, modes: false, tournaments: false },
             LobbyEvent::Challenged { id: 3, from: "Yugi".into(), map: Some(MapChoice::Game { index: 0x17 }) },
             LobbyEvent::MatchReady {
                 match_id: "m".into(),
@@ -690,7 +946,7 @@ mod account_wire_tests {
         let game = json!({ "compat": compat }).as_object().unwrap().clone();
         let pairs = [
             (
-                LobbyRequest::LobbyHello { lobby_version: 1, compat: compat.clone(), client: "l".into(), account: true, modes: false },
+                LobbyRequest::LobbyHello { lobby_version: 1, compat: compat.clone(), client: "l".into(), account: true, modes: false, tournaments: false },
                 AccountRequest::LobbyHello { lobby_version: 1, client: "l".into(), account: true, game },
             ),
             (
@@ -758,12 +1014,81 @@ mod account_wire_tests {
             let read: AccountEvent = serde_json::from_value(to_value(&lobby).unwrap()).unwrap();
             assert_eq!(read, account);
         }
-        let welcome = LobbyEvent::LobbyWelcome { lobby_version: 1, server: "S".into(), computer: true, invite_required: false, choices: true, email: true, spectate: true, modes: false };
+        let welcome = LobbyEvent::LobbyWelcome { lobby_version: 1, server: "S".into(), computer: true, invite_required: false, choices: true, email: true, spectate: true, modes: false, tournaments: false };
         let AccountEvent::LobbyWelcome { lobby_version: 1, server, invite_required: false, email: true, game } =
             serde_json::from_value(to_value(&welcome).unwrap()).unwrap()
         else {
             panic!("the welcome reads")
         };
         assert_eq!((server.as_str(), game.get("computer")), ("S", Some(&json!(true))));
+    }
+}
+
+/// Tournaments (a port addition) leave older clients' and servers' wire
+/// unchanged: still lobby version 1 and protocol 4.
+#[cfg(test)]
+mod tournament_wire_tests {
+    use super::*;
+    use serde_json::{json, to_value};
+
+    /// The messages as the released 2026-11-23 game reads them.
+    #[derive(Debug, Deserialize)]
+    struct OldEntry {
+        name: String,
+        state: PlayerState,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(tag = "type", rename_all = "snake_case")]
+    enum OldEvent {
+        LobbyWelcome { modes: bool },
+        Players { players: Vec<OldEntry> },
+    }
+
+    #[test]
+    fn older_clients_read_the_new_lists_and_send_what_they_always_sent() {
+        assert_eq!((LOBBY_VERSION, crate::PROTOCOL_VERSION), (1, 4));
+        // A hello without tournaments is the old hello.
+        let hello = LobbyRequest::LobbyHello { lobby_version: 1, compat: Compat::current("x"), client: "g".into(), account: false, modes: true, tournaments: false };
+        let text = serde_json::to_string(&hello).unwrap();
+        assert!(!text.contains("tournaments"), "{text}");
+        let old_hello = json!({"type": "lobby_hello", "lobby_version": 1, "compat": Compat::current("x"), "client": "g", "modes": true});
+        assert_eq!(serde_json::from_value::<LobbyRequest>(old_hello).unwrap(), hello);
+        // A new server's welcome and badged player list read as before.
+        let welcome = LobbyEvent::LobbyWelcome {
+            lobby_version: 1,
+            server: "S".into(),
+            computer: false,
+            invite_required: false,
+            choices: true,
+            email: false,
+            spectate: true,
+            modes: true,
+            tournaments: true,
+        };
+        assert!(matches!(serde_json::from_value::<OldEvent>(to_value(&welcome).unwrap()).unwrap(), OldEvent::LobbyWelcome { modes: true }));
+        let mut champ = PlayerEntry::new("Yugi", PlayerState::Idle);
+        champ.titles = 2;
+        champ.quick_titles = 1;
+        let list = LobbyEvent::Players { players: vec![champ, PlayerEntry::new("Kaiba", PlayerState::InMatch)] };
+        let value = to_value(&list).unwrap();
+        assert_eq!(value["players"][1], json!({"name": "Kaiba", "state": "in_match"}), "no badge, no new field");
+        let OldEvent::Players { players } = serde_json::from_value(value).unwrap() else { panic!() };
+        assert_eq!((players[0].name.as_str(), players[0].state), ("Yugi", PlayerState::Idle));
+        // An older server's welcome: no tournaments.
+        let old: LobbyEvent = serde_json::from_str(r#"{"type":"lobby_welcome","lobby_version":1,"server":"S","computer":false,"modes":true}"#).unwrap();
+        assert!(matches!(old, LobbyEvent::LobbyWelcome { tournaments: false, .. }));
+    }
+
+    #[test]
+    fn tournament_names_and_the_banner() {
+        for ok in ["Friday Cup", "Joey's Cup", "Duel Night 2", "R&D Cup!"] {
+            assert!(check_tournament_name(ok), "{ok}");
+        }
+        for bad in ["Cu", " Cup", "Cup ", "Two  Spaces", "1234", "Cup<b>", &"x".repeat(25)] {
+            assert!(!check_tournament_name(bad), "{bad}");
+        }
+        assert!(PREVIEW_BANNER.contains("30 minutes before the start"));
+        assert_eq!((CHECK_IN_OPENS_SECS, DRAW_SECS, READY_SECS, QUICK_CHECK_IN_SECS, QUICK_PLAYERS), (3600, 1800, 600, 300, 4));
     }
 }

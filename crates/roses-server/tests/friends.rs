@@ -74,7 +74,7 @@ fn two_friends_sign_up_challenge_play_over_tls_and_return_to_the_lobby() {
         .expect("no plain text off this machine");
     assert!(e.to_string().contains("loopback"), "{e}");
     let mut old = connect::<LobbyRequest, LobbyEvent>(&local).unwrap();
-    old.send(&LobbyRequest::LobbyHello { lobby_version: LOBBY_VERSION + 1, compat: compat(), client: "old".into(), account: false, modes: false }).unwrap();
+    old.send(&LobbyRequest::LobbyHello { lobby_version: LOBBY_VERSION + 1, compat: compat(), client: "old".into(), account: false, modes: false, tournaments: false }).unwrap();
     assert!(matches!(
         recv_timeout(&mut old, Duration::from_secs(10)),
         Received::Message(LobbyEvent::LobbyRefused { reason: LobbyRefusal::LobbyVersion { .. } })

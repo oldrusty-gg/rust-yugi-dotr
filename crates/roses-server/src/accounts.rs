@@ -17,7 +17,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Sessions last this long after their last use (seconds).
 pub const SESSION_SECONDS: i64 = 30 * 24 * 3600;
-const SCHEMA_VERSION: i64 = 1;
+/// 1: users, invites, sessions, matches. 2: tournaments (a port
+/// addition): tournaments, tournament_entries, tournament_matches,
+/// tournament_actions and badges, added beside the version-1 tables
+/// (which are unchanged), with a copy of the version-1 file made first
+/// ([`Accounts::open`]).
+pub const SCHEMA_VERSION: i64 = 2;
 
 /// Argon2id cost: OWASP's minimum (19 MiB, 2 passes, 1 lane) for the
 /// server; tests use a tiny cost. The PHC string records the parameters,
@@ -148,19 +153,37 @@ pub struct Accounts {
     db: Connection,
 }
 
+// Tournaments in the same file (schema 2).
+#[path = "tournament_db.rs"]
+pub mod tournament_db;
+pub use tournament_db::TOURNAMENT_TABLES;
+
 impl Accounts {
     /// Open (creating when missing) the account database.
+    /// A version-1 database (from a server before tournaments) is copied
+    /// first to `<file>.pre-v2-<unix time>.bak` with `VACUUM INTO` (a
+    /// consistent copy of a live file, WAL included), then upgraded in one
+    /// transaction: new tables only, nothing in the old ones changes. A
+    /// failed copy stops the upgrade (the file stays at version 1).
     pub fn open(path: &Path) -> Result<Self, String> {
         let db = Connection::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        Self::init(db)
+        Self::init(db, Some(path))
     }
 
     /// A database in memory (tests).
     pub fn in_memory() -> Result<Self, String> {
-        Self::init(Connection::open_in_memory().map_err(|e| e.to_string())?)
+        Self::init(Connection::open_in_memory().map_err(|e| e.to_string())?, None)
     }
 
-    fn init(db: Connection) -> Result<Self, String> {
+    /// The copy [`Accounts::open`] makes of a version-1 file before
+    /// upgrading it.
+    pub fn pre_v2_backup(path: &Path, at: i64) -> std::path::PathBuf {
+        let mut name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+        name.push(format!(".pre-v2-{at}.bak"));
+        path.with_file_name(name)
+    }
+
+    fn init(db: Connection, path: Option<&Path>) -> Result<Self, String> {
         let e = |e: rusqlite::Error| e.to_string();
         db.pragma_update(None, "foreign_keys", "ON").map_err(e)?;
         // WAL: readers do not block the server, a crash loses nothing
@@ -203,8 +226,38 @@ impl Accounts {
                 revisions INTEGER NOT NULL);",
         )
         .map_err(e)?;
-        db.pragma_update(None, "user_version", SCHEMA_VERSION).map_err(e)?;
+        if version == 1 {
+            if let Some(path) = path {
+                // Backup-safe: the old file as it was, before any change.
+                let backup = Self::pre_v2_backup(path, now_seconds());
+                let target = backup.to_str().ok_or("the backup path must be UTF-8")?;
+                if !backup.exists() {
+                    db.execute("VACUUM INTO ?1", params![target])
+                        .map_err(|err| format!("copying the version-1 database to {} before the upgrade failed: {err}", backup.display()))?;
+                }
+            }
+        }
+        if version < 2 {
+            let mut db = db;
+            let tx = db.transaction().map_err(e)?;
+            tx.execute_batch(TOURNAMENT_TABLES).map_err(e)?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION).map_err(e)?;
+            tx.commit().map_err(e)?;
+            return Ok(Self { db });
+        }
         Ok(Self { db })
+    }
+
+    /// The schema version of the open database (`PRAGMA user_version`).
+    pub fn schema_version(&self) -> Result<i64, String> {
+        self.db.pragma_query_value(None, "user_version", |r| r.get(0)).map_err(|e| e.to_string())
+    }
+
+    /// Rollback to a server from before tournaments: mark the file version
+    /// 1 again (that server refuses a newer file). The tournament tables
+    /// stay and are ignored; the next newer server upgrades it again.
+    pub fn mark_schema_v1_for_rollback(&self) -> Result<(), String> {
+        self.db.pragma_update(None, "user_version", 1).map_err(|e| e.to_string())
     }
 
     // ---- invites ------------------------------------------------------
@@ -430,6 +483,7 @@ impl Accounts {
         let resets = tx.execute("DELETE FROM invites WHERE for_user = ?1", params![key]).map_err(e)?;
         tx.execute("UPDATE matches SET player0 = ?1 WHERE lower(player0) = ?2", params![DELETED_NAME, key]).map_err(e)?;
         tx.execute("UPDATE matches SET player1 = ?1 WHERE lower(player1) = ?2", params![DELETED_NAME, key]).map_err(e)?;
+        tournament_db::forget_player(&tx, &key, &user.name).map_err(e)?;
         tx.execute("DELETE FROM users WHERE id = ?1", params![user.id]).map_err(e)?;
         tx.commit().map_err(e)?;
         Ok(Some(Deleted { name: user.name, sessions, resets, match_ids }))

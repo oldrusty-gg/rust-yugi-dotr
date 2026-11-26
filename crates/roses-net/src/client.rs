@@ -55,6 +55,8 @@ const AWAY_MARGIN_MS: u64 = 2_000;
 /// disconnected seat's turn the moment it comes up, with the cause of an
 /// expired turn. So a turn the server ended well before the clock says the
 /// seat is away, from its first skipped turn until it acts or is out.
+/// Since issue 6 the same holds for a 2-player match with no turn clock: the
+/// server skips a silent player's turn after `IDLE_TURN_MS` (roses-server).
 #[derive(Clone, Debug, Default)]
 pub struct AwaySeats {
     seats: BTreeSet<u8>,
@@ -77,8 +79,12 @@ impl AwaySeats {
         limit: Option<u64>,
         now: u64,
     ) {
-        let Some(multi) = &view.multi else { return };
-        self.seats.retain(|&s| multi.out.get(usize::from(s)).is_some_and(Option::is_none));
+        // A 2-player match (issue 6): with no turn clock, a turn the server
+        // ends is a silent player's skipped turn, so it counts too; with a
+        // clock it is only ever the clock running out (`skipped` below).
+        if let Some(multi) = &view.multi {
+            self.seats.retain(|&s| multi.out.get(usize::from(s)).is_some_and(Option::is_none));
+        }
         if let Actor::Seat { seat } = actor {
             self.seats.remove(&seat);
         }

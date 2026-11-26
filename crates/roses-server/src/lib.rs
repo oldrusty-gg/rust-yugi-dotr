@@ -17,6 +17,7 @@ pub mod play;
 pub mod replay;
 pub mod serve;
 pub mod tls;
+pub mod tournament;
 
 pub use online::OnlineMatch;
 pub use replay::{replay, state_hash, MatchSetup, Replay};

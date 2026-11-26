@@ -1178,7 +1178,7 @@ fn the_lobby_cursor_stays_on_its_button_as_players_come_and_go() {
     m.lobby.as_mut().unwrap().user = Some("Yugi".into());
     m.screen = Screen::Lobby;
     let list = |names: &[&str]| LobbyEvent::Players {
-        players: names.iter().map(|n| PlayerEntry { name: (*n).into(), state: PlayerState::Idle }).collect(),
+        players: names.iter().map(|n| PlayerEntry::new(*n, PlayerState::Idle)).collect(),
     };
     server.send(&list(&["Yugi", "Kaiba", "Joey"])).unwrap();
     m.update();
@@ -1247,8 +1247,8 @@ fn the_lobby_says_so_while_the_server_still_holds_a_match_that_failed_to_join() 
     let (mut m, mut server) = menu_on_fake_lobby("held");
     let list = |state| LobbyEvent::Players {
         players: vec![
-            PlayerEntry { name: "Yugi".into(), state },
-            PlayerEntry { name: "Kaiba".into(), state: PlayerState::Idle },
+            PlayerEntry::new("Yugi", state),
+            PlayerEntry::new("Kaiba", PlayerState::Idle),
         ],
     };
     m.lobby.as_mut().unwrap().user = Some("Yugi".into());

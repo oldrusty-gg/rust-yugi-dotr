@@ -31,6 +31,23 @@
 //!       log becomes "(deleted)"; with --replay-dir also its matches' replays)
 //!   roses-server accounts --db <accounts.db> prune-matches <days>
 //!       (delete match-log rows older than <days> days)
+//!   roses-server accounts --db <accounts.db> tournament create --name <text> --start "YYYY-MM-DD hh:mm"
+//!       [--cap N] [--weekly]   (UTC; sign-up opens at once; a running hub
+//!       lists it within TOURNAMENT_EVERY_MS)
+//!   roses-server accounts --db <accounts.db> tournament list | show <id>
+//!   roses-server accounts --db <accounts.db> tournament cancel <id> | kick <id> <name>
+//!       (queued: a running hub applies them within a second; a stopped
+//!       one when it starts)
+//!   roses-server accounts --db <accounts.db> schema-rollback-v1
+//!       (before running a server from before tournaments on this file:
+//!       marks it schema 1 again; the tournament tables stay)
+//!
+//! Tournaments (a port addition; the hub): `--weekly "fri 19:00"` (UTC, the
+//! default) puts up a weekly tournament 8 days ahead, `--weekly-from
+//! "YYYY-MM-DD hh:mm"` holds the first one back until then, `--no-weekly`
+//! turns it off; `--no-quick` turns off the always-open quick tournament;
+//! `--tournaments-file <file>` (default tournaments.json beside the
+//! database) or `--no-tournaments-file` for the brackets a web page reads.
 //!   roses-server tls self-signed --out <dir> --name <host or IP> [--name ..]
 //!   roses-server tls fingerprint <cert.pem>
 //!   roses-server loadtest --addr <host:port> ... (see roses_server::loadtest)
@@ -148,6 +165,7 @@ fn hub(args: Vec<String>) -> Result<(), String> {
     let mut email = crate::hub::email_hub::EmailArgs::default();
     // None: the default, hub-status.json beside the accounts database.
     let mut status_file: Option<Option<PathBuf>> = None;
+    let mut tournaments_file: Option<Option<PathBuf>> = None;
     while let Some(a) = args.next() {
         let mut value = || args.next().ok_or(format!("{a} needs a value"));
         match a.as_str() {
@@ -196,12 +214,27 @@ fn hub(args: Vec<String>) -> Result<(), String> {
             "--match-seed" => settings.fixed_seed = Some(value()?.parse().map_err(|_| "bad --match-seed")?),
             "--status-file" => status_file = Some(Some(value()?.into())),
             "--no-status-file" => status_file = Some(None),
+            "--tournaments-file" => tournaments_file = Some(Some(value()?.into())),
+            "--no-tournaments-file" => tournaments_file = Some(None),
+            "--weekly" => {
+                let not_before = settings.weekly.and_then(|w| w.not_before);
+                let w = crate::hub::tournament_hub::WeeklySchedule::parse(&value()?).ok_or("--weekly needs a day and a UTC time, e.g. \"fri 19:00\"")?;
+                settings.weekly = Some(crate::hub::tournament_hub::WeeklySchedule { not_before, ..w });
+            }
+            "--weekly-from" => {
+                let at = crate::tournament::parse_utc(&value()?).ok_or("--weekly-from needs \"YYYY-MM-DD hh:mm\" (UTC)")?;
+                let w = settings.weekly.unwrap_or_default();
+                settings.weekly = Some(crate::hub::tournament_hub::WeeklySchedule { not_before: Some(at), ..w });
+            }
+            "--no-weekly" => settings.weekly = None,
+            "--no-quick" => settings.quick_tournaments = false,
             other if email.take(other, &mut value)? => {}
             other => return Err(format!("unknown hub argument {other}")),
         }
     }
     let db = db.ok_or("--db <accounts.db> is required (created when missing)")?;
     settings.status_file = status_file.unwrap_or_else(|| Some(default_status_file(&db)));
+    settings.tournaments_file = tournaments_file.unwrap_or_else(|| Some(default_status_file(&db).with_file_name("tournaments.json")));
     let data = if synthetic_data {
         HubData::synthetic(computer)
     } else {
@@ -282,7 +315,7 @@ fn accounts(args: Vec<String>) -> Result<(), String> {
     let mut a = Accounts::open(&db)?;
     let command = args
         .next()
-        .ok_or("accounts: status, online, invite, invites, revoke, users, ban, unban, disable, enable, reset, password, matches, backup, delete or prune-matches")?;
+        .ok_or("accounts: status, online, invite, invites, revoke, users, ban, unban, disable, enable, reset, password, matches, backup, delete, prune-matches, tournament or schema-rollback-v1")?;
     let rest: Vec<String> = args.collect();
     let arg = |i: usize, what: &str| rest.get(i).cloned().ok_or(format!("{command} needs {what}"));
     match command.as_str() {
@@ -429,7 +462,112 @@ fn accounts(args: Vec<String>) -> Result<(), String> {
             a.backup(&to)?;
             println!("backed up to {}", to.display());
         }
+        "tournament" => tournament(&a, &rest)?,
+        "schema-rollback-v1" => {
+            a.mark_schema_v1_for_rollback()?;
+            println!("{} is marked schema 1: a server from before tournaments opens it; a newer one upgrades it again", db.display());
+        }
         other => return Err(format!("unknown accounts command {other}")),
+    }
+    Ok(())
+}
+
+/// `accounts tournament ...`: the operator's tournament commands.
+fn tournament(a: &Accounts, rest: &[String]) -> Result<(), String> {
+    use crate::tournament::{parse_utc, Tournament};
+    let sub = rest.first().map(String::as_str).ok_or("tournament: create, list, show, cancel or kick")?;
+    let id_arg = |i: usize| -> Result<u64, String> { rest.get(i).and_then(|v| v.parse().ok()).ok_or(format!("tournament {sub} needs a tournament id")) };
+    match sub {
+        "create" => {
+            let (mut name, mut start, mut cap, mut weekly) = (None, None, crate::tournament::WEEKLY_CAP, false);
+            let mut i = 1;
+            while i < rest.len() {
+                let flag = rest[i].as_str();
+                if flag == "--weekly" {
+                    weekly = true;
+                    i += 1;
+                    continue;
+                }
+                let v = rest.get(i + 1).ok_or(format!("{flag} needs a value"))?;
+                match flag {
+                    "--name" => name = Some(v.clone()),
+                    "--start" => start = Some(parse_utc(v).ok_or("--start needs \"YYYY-MM-DD hh:mm\" (UTC)")?),
+                    "--cap" => cap = v.parse().map_err(|_| "bad --cap")?,
+                    o => return Err(format!("unknown tournament create argument {o}")),
+                }
+                i += 2;
+            }
+            let name = name.ok_or("tournament create needs --name")?;
+            let start = start.ok_or("tournament create needs --start \"YYYY-MM-DD hh:mm\" (UTC)")?;
+            if !roses_net::lobby::check_tournament_name(&name) {
+                return Err(format!("{name:?}: 3-24 letters, digits, spaces and ' - . ! &"));
+            }
+            if !(roses_net::lobby::TOURNAMENT_CAP_MIN..=roses_net::lobby::TOURNAMENT_CAP_MAX).contains(&cap) {
+                return Err("--cap must be 4 to 128".into());
+            }
+            let now = crate::accounts::now_seconds();
+            if start <= now + roses_net::lobby::DRAW_SECS {
+                return Err("the start must be more than 30 minutes from now (the draw is at 30 minutes before)".into());
+            }
+            let id = a.insert_tournament(&Tournament::new(&name, None, start, cap, weekly, now))?;
+            println!("{id}");
+            eprintln!(
+                "tournament {id} \"{name}\": starts {} UTC, cap {cap}{}; sign-up open now, check-in from {} UTC, draw at {} UTC",
+                utc_stamp(start),
+                if weekly { ", the weekly one" } else { "" },
+                utc_stamp(start - roses_net::lobby::CHECK_IN_OPENS_SECS),
+                utc_stamp(start - roses_net::lobby::DRAW_SECS)
+            );
+        }
+        "list" => {
+            for t in a.all_tournaments(50)? {
+                println!(
+                    "{:>4}  {:<24}  {:<9}  {}  {}/{} signed up, {} checked in{}{}{}",
+                    t.id,
+                    t.name,
+                    format!("{:?}", t.state).to_lowercase(),
+                    if t.quick && t.starts == 0 { "(fills)            ".to_string() } else { format!("{} UTC", utc_stamp(t.starts)) },
+                    t.entries.len(),
+                    t.cap,
+                    t.entries.iter().filter(|e| e.checked_in).count(),
+                    if t.weekly { "  weekly" } else if t.quick { "  quick" } else { "" },
+                    t.champion.as_ref().map_or(String::new(), |c| format!("  champion {c}")),
+                    t.note.as_ref().map_or(String::new(), |n| format!("  ({n})"))
+                );
+            }
+        }
+        "show" => {
+            let id = id_arg(1)?;
+            let t = a.tournament(id)?.ok_or(format!("no tournament {id}"))?;
+            let v = t.view(None);
+            println!("{} \"{}\": {:?}, bracket of {}{}", t.id, t.name, t.state, v.size, if v.preview { " (preview)" } else { "" });
+            if let Some(seed) = t.bracket.as_ref().and_then(|b| b.seed) {
+                println!("draw seed {seed:016x}");
+            }
+            let side = |s: &roses_net::lobby::BracketSide| match s {
+                roses_net::lobby::BracketSide::Player { name, seed } => format!("{name} ({seed})"),
+                roses_net::lobby::BracketSide::Bye => "bye".into(),
+                roses_net::lobby::BracketSide::Tbd => "?".into(),
+            };
+            for (r, games) in v.rounds.iter().enumerate() {
+                for g in games {
+                    let won = g.winner.map_or(String::new(), |w| format!("  -> {} ({:?})", side(&g.sides[usize::from(w)]), g.how.unwrap_or(roses_net::lobby::WinHow::Played)));
+                    println!("  round {}: {} v {}{won}", r + 1, side(&g.sides[0]), side(&g.sides[1]));
+                }
+            }
+        }
+        "cancel" => {
+            let id = id_arg(1)?;
+            a.queue_tournament_action(id, "cancel", None)?;
+            println!("tournament {id}: cancel queued (a running hub applies it within a second)");
+        }
+        "kick" => {
+            let id = id_arg(1)?;
+            let name = rest.get(2).ok_or("tournament kick needs <id> <name>")?;
+            a.queue_tournament_action(id, "kick", Some(name))?;
+            println!("tournament {id}: removing {name} queued (a running hub applies it within a second)");
+        }
+        o => return Err(format!("unknown tournament command {o}")),
     }
     Ok(())
 }

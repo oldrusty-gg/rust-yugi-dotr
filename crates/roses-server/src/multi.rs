@@ -156,6 +156,8 @@ struct Seat {
     absent_since: Option<u64>,
     presence: bool,
     reads_watchers: bool,
+    /// Issue 6: silent turns skipped (`crate::online::IDLE_STRIKES`).
+    strikes: u8,
 }
 
 #[derive(Clone)]
@@ -176,6 +178,8 @@ pub struct MultiMatch {
     ended: Option<(Outcome, Cause)>,
     now: u64,
     turn_clock: u64,
+    /// Issue 6: time since the acting player's last input this turn.
+    idle_clock: u64,
     turn_key: (u8, u8),
     computers: Vec<Option<MultiComputer>>,
     /// Milliseconds between two computer commands (the others see them
@@ -258,6 +262,7 @@ impl MultiMatch {
                     absent_since: None,
                     presence: false,
                     reads_watchers: false,
+                    strikes: 0,
                 })
                 .collect(),
             id,
@@ -274,6 +279,7 @@ impl MultiMatch {
             ended: None,
             now: 0,
             turn_clock: 0,
+            idle_clock: 0,
             turn_key: (0, 0),
             computers: vec![None; n],
             computer_delay: 350,
@@ -557,6 +563,7 @@ impl MultiMatch {
             .collect();
         self.turn_key = (duel.round, duel.active);
         self.turn_clock = 0;
+        self.idle_clock = 0;
         self.replay.final_state = state_hash(&duel);
         self.replay.setup = Some(setup);
         self.replay.seats = self.seat_infos();
@@ -613,6 +620,7 @@ impl MultiMatch {
             return out;
         }
         self.turn_clock += dt;
+        self.idle_clock += dt;
         self.computer_wait += dt;
         // A few steps per tick at most (computers with no delay in tests).
         for _ in 0..64 {
@@ -644,11 +652,18 @@ impl MultiMatch {
                 self.end_turn_for(active, Cause::TurnTimeout, &mut out);
                 continue;
             }
-            if let Some(limit) = self.policy.turn_limit {
-                if self.turn_clock >= limit {
+            match self.policy.turn_limit {
+                Some(limit) if self.turn_clock >= limit => {
                     self.turn_timeout(active, &mut out);
                     continue;
                 }
+                // Issue 6: no clock, but a silent player's turn is skipped
+                // with a strike, and after the strikes they are out.
+                None if self.idle_clock >= crate::online::IDLE_TURN_MS => {
+                    self.idle_timeout(active, &mut out);
+                    continue;
+                }
+                _ => {}
             }
             break;
         }
@@ -759,6 +774,24 @@ impl MultiMatch {
         self.turn_clock = 0;
     }
 
+    /// Issue 6: the acting player sent nothing for `IDLE_TURN_MS`.
+    fn idle_timeout(&mut self, seat: u8, out: &mut Outbox) {
+        self.idle_clock = 0;
+        let st = &mut self.seats[usize::from(seat)];
+        if st.strikes >= crate::online::IDLE_STRIKES {
+            self.forfeit(seat, Actor::Server, Cause::RepeatedTimeouts, out);
+            return;
+        }
+        st.strikes += 1;
+        self.end_turn_for(seat, Cause::TurnTimeout, out);
+        self.idle_clock = 0;
+    }
+
+    /// A seat's silent-turn strikes so far (issue 6).
+    pub fn strikes(&self, seat: u8) -> u8 {
+        self.seats.get(usize::from(seat)).map_or(0, |s| s.strikes)
+    }
+
     fn forfeit(&mut self, seat: u8, actor: Actor, cause: Cause, out: &mut Outbox) {
         let Some(duel) = self.duel.as_ref() else { return };
         if let Ok((next, events)) = duel.forfeit_with(seat, &self.cards) {
@@ -784,6 +817,7 @@ impl MultiMatch {
         if key != self.turn_key {
             self.turn_key = key;
             self.turn_clock = 0;
+            self.idle_clock = 0;
             self.computer_wait = 0;
         }
         // Nobody watching: a later spectator starts from a fresh snapshot.
@@ -863,6 +897,12 @@ impl MultiMatch {
     /// One message from an attached seat.
     pub fn handle(&mut self, seat: u8, message: ClientMessage, now: u64) -> Outbox {
         let mut out = self.advance(now);
+        // Issue 6: any input of the acting player starts its silence anew.
+        if self.duel.as_ref().is_some_and(|d| d.active == seat)
+            && matches!(message, ClientMessage::Command { .. } | ClientMessage::Forfeit { .. } | ClientMessage::Presence { .. })
+        {
+            self.idle_clock = 0;
+        }
         let (seq, command) = match message {
             ClientMessage::Hello { .. } => {
                 out.push((seat, ServerMessage::ProtocolError { message: "already joined".into() }));
